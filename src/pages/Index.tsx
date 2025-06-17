@@ -1,4 +1,3 @@
-
 import { useState } from 'react';
 import { MessageCircle, Camera, Search, Cookie, Mic, Files, Share2, Smartphone, Wifi, WifiOff } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -52,7 +51,7 @@ const Index = () => {
       <div className="text-center py-8 px-4">
         <div className="flex items-center justify-center gap-2 mb-4">
           <Smartphone className="w-8 h-8 text-white" />
-          <h1 className="text-3xl font-bold text-white">AI Phone Assistant</h1>
+          <h1 className="text-3xl font-bold text-white">Exile</h1>
         </div>
         <p className="text-white/80 text-lg">Access everything with AI power</p>
         
