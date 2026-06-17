@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { MessageCircle, Camera, Search, Image as ImageIcon, Mic, Files, Share2, Cpu, Wifi, WifiOff, Shield } from 'lucide-react';
+import { MessageCircle, Camera, Search, Image as ImageIcon, Mic, Files, Share2, Cpu, Wifi, WifiOff, Activity, MessageSquare, Phone } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import ChatSection from '@/components/ChatSection';
@@ -8,6 +8,9 @@ import FilesSection from '@/components/FilesSection';
 import ShareSection from '@/components/ShareSection';
 import VoiceSection from '@/components/VoiceSection';
 import ImageAnalysisSection from '@/components/ImageAnalysisSection';
+import WhatsAppSection from '@/components/WhatsAppSection';
+import CallsSection from '@/components/CallsSection';
+import DashboardSection from '@/components/DashboardSection';
 
 const Index = () => {
   const [activeSection, setActiveSection] = useState('chat');
@@ -29,18 +32,23 @@ const Index = () => {
 
   const menuItems = [
     { id: 'chat', icon: MessageCircle, label: 'Console' },
+    { id: 'dashboard', icon: Activity, label: 'Systems' },
+    { id: 'whatsapp', icon: MessageSquare, label: 'WhatsApp' },
+    { id: 'calls', icon: Phone, label: 'Calls' },
     { id: 'camera', icon: Camera, label: 'Optics' },
     { id: 'analysis', icon: Search, label: 'Analyze' },
-    { id: 'generate', icon: ImageIcon, label: 'Render' },
     { id: 'voice', icon: Mic, label: 'Voice' },
     { id: 'files', icon: Files, label: 'Vault' },
     { id: 'share', icon: Share2, label: 'Share' },
-    { id: 'location', icon: Shield, label: 'Recon' },
+    { id: 'generate', icon: ImageIcon, label: 'Render' },
   ];
 
   const renderActiveSection = () => {
     switch (activeSection) {
       case 'chat': return <ChatSection />;
+      case 'dashboard': return <DashboardSection />;
+      case 'whatsapp': return <WhatsAppSection />;
+      case 'calls': return <CallsSection />;
       case 'camera': return <CameraSection />;
       case 'analysis': return <ImageAnalysisSection />;
       case 'voice': return <VoiceSection />;
@@ -70,7 +78,7 @@ const Index = () => {
               </div>
               <div>
                 <h1 className="text-2xl font-bold tracking-[0.3em] text-cyan-100">EXILE</h1>
-                <p className="text-[10px] tracking-widest text-cyan-400/70">J.A.R.V.I.S. PROTOCOL v3.1</p>
+                <p className="text-[10px] tracking-widest text-cyan-400/70">COGNITIVE OS v5 · 15 SYSTEMS ONLINE</p>
               </div>
             </div>
             <div className="text-right text-xs space-y-0.5">
@@ -86,7 +94,7 @@ const Index = () => {
         </div>
 
         <div className="px-4 mb-4 max-w-3xl mx-auto">
-          <div className="grid grid-cols-4 gap-2">
+          <div className="grid grid-cols-5 gap-2">
             {menuItems.map((item) => {
               const active = activeSection === item.id;
               return (
