@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { MessageCircle, Camera, Search, Image as ImageIcon, Mic, Files, Share2, Cpu, Wifi, WifiOff, Shield } from 'lucide-react';
+import { MessageCircle, Camera, Search, Image as ImageIcon, Mic, Files, Share2, Cpu, Wifi, WifiOff, Activity, MessageSquare, Phone } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import ChatSection from '@/components/ChatSection';
@@ -8,6 +8,9 @@ import FilesSection from '@/components/FilesSection';
 import ShareSection from '@/components/ShareSection';
 import VoiceSection from '@/components/VoiceSection';
 import ImageAnalysisSection from '@/components/ImageAnalysisSection';
+import WhatsAppSection from '@/components/WhatsAppSection';
+import CallsSection from '@/components/CallsSection';
+import DashboardSection from '@/components/DashboardSection';
 
 const Index = () => {
   const [activeSection, setActiveSection] = useState('chat');
@@ -29,18 +32,23 @@ const Index = () => {
 
   const menuItems = [
     { id: 'chat', icon: MessageCircle, label: 'Console' },
+    { id: 'dashboard', icon: Activity, label: 'Systems' },
+    { id: 'whatsapp', icon: MessageSquare, label: 'WhatsApp' },
+    { id: 'calls', icon: Phone, label: 'Calls' },
     { id: 'camera', icon: Camera, label: 'Optics' },
     { id: 'analysis', icon: Search, label: 'Analyze' },
-    { id: 'generate', icon: ImageIcon, label: 'Render' },
     { id: 'voice', icon: Mic, label: 'Voice' },
     { id: 'files', icon: Files, label: 'Vault' },
     { id: 'share', icon: Share2, label: 'Share' },
-    { id: 'location', icon: Shield, label: 'Recon' },
+    { id: 'generate', icon: ImageIcon, label: 'Render' },
   ];
 
   const renderActiveSection = () => {
     switch (activeSection) {
       case 'chat': return <ChatSection />;
+      case 'dashboard': return <DashboardSection />;
+      case 'whatsapp': return <WhatsAppSection />;
+      case 'calls': return <CallsSection />;
       case 'camera': return <CameraSection />;
       case 'analysis': return <ImageAnalysisSection />;
       case 'voice': return <VoiceSection />;
