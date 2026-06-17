@@ -94,7 +94,7 @@ const Index = () => {
         </div>
 
         <div className="px-4 mb-4 max-w-3xl mx-auto">
-          <div className="grid grid-cols-4 gap-2">
+          <div className="grid grid-cols-5 gap-2">
             {menuItems.map((item) => {
               const active = activeSection === item.id;
               return (
