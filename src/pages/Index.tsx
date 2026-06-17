@@ -78,7 +78,7 @@ const Index = () => {
               </div>
               <div>
                 <h1 className="text-2xl font-bold tracking-[0.3em] text-cyan-100">EXILE</h1>
-                <p className="text-[10px] tracking-widest text-cyan-400/70">J.A.R.V.I.S. PROTOCOL v3.1</p>
+                <p className="text-[10px] tracking-widest text-cyan-400/70">COGNITIVE OS v5 · 15 SYSTEMS ONLINE</p>
               </div>
             </div>
             <div className="text-right text-xs space-y-0.5">
