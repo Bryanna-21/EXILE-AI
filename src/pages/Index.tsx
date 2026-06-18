@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { MessageCircle, Camera, Search, Image as ImageIcon, Mic, Files, Share2, Cpu, Wifi, WifiOff, Activity, MessageSquare, Phone } from 'lucide-react';
+import { MessageCircle, Camera, Search, Image as ImageIcon, Mic, Files, Share2, Cpu, Wifi, WifiOff, Activity, MessageSquare, Phone, ShieldCheck } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import ChatSection from '@/components/ChatSection';
@@ -11,6 +11,7 @@ import ImageAnalysisSection from '@/components/ImageAnalysisSection';
 import WhatsAppSection from '@/components/WhatsAppSection';
 import CallsSection from '@/components/CallsSection';
 import DashboardSection from '@/components/DashboardSection';
+import SystemAccessSection from '@/components/SystemAccessSection';
 
 const Index = () => {
   const [activeSection, setActiveSection] = useState('chat');
@@ -33,6 +34,7 @@ const Index = () => {
   const menuItems = [
     { id: 'chat', icon: MessageCircle, label: 'Console' },
     { id: 'dashboard', icon: Activity, label: 'Systems' },
+    { id: 'system', icon: ShieldCheck, label: 'Access' },
     { id: 'whatsapp', icon: MessageSquare, label: 'WhatsApp' },
     { id: 'calls', icon: Phone, label: 'Calls' },
     { id: 'camera', icon: Camera, label: 'Optics' },
@@ -47,6 +49,7 @@ const Index = () => {
     switch (activeSection) {
       case 'chat': return <ChatSection />;
       case 'dashboard': return <DashboardSection />;
+      case 'system': return <SystemAccessSection />;
       case 'whatsapp': return <WhatsAppSection />;
       case 'calls': return <CallsSection />;
       case 'camera': return <CameraSection />;
@@ -78,7 +81,7 @@ const Index = () => {
               </div>
               <div>
                 <h1 className="text-2xl font-bold tracking-[0.3em] text-cyan-100">EXILE</h1>
-                <p className="text-[10px] tracking-widest text-cyan-400/70">COGNITIVE OS v5 · 15 SYSTEMS ONLINE</p>
+                <p className="text-[10px] tracking-widest text-cyan-400/70">SOVEREIGN COGNITIVE OS · CLOUD + OLLAMA + OFFLINE</p>
               </div>
             </div>
             <div className="text-right text-xs space-y-0.5">
@@ -121,7 +124,7 @@ const Index = () => {
             <CardContent className="p-0">{renderActiveSection()}</CardContent>
           </Card>
           <p className="text-center text-[10px] tracking-[0.3em] text-cyan-500/50 mt-4">
-            STARK INDUSTRIES // SECURE CHANNEL
+            EXILE // SOVEREIGN SECURE CHANNEL
           </p>
         </div>
       </div>

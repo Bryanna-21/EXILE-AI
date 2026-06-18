@@ -1,9 +1,14 @@
 import { useEffect, useRef, useState } from "react";
-import { Bot, User, Send, Mic, Volume2, VolumeX, Wifi, WifiOff } from "lucide-react";
+import { Bot, User, Send, Mic, Volume2, VolumeX, Wifi, WifiOff, Cpu } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Input } from "@/components/ui/input";
-import { offlineRespond, speak } from "@/lib/offlineJarvis";
+import {
+  offlineRespond,
+  speak,
+  ollamaAvailable,
+  ollamaChatStream,
+} from "@/lib/offlineExile";
 import { toast } from "sonner";
 
 interface Message {
@@ -21,7 +26,7 @@ const ChatSection = () => {
     {
       id: "1",
       content:
-        "J.A.R.V.I.S. online. All systems nominal. Whether we have data or not, I'm at your service, Sir. How may I assist?",
+        "Exile online. All systems nominal. Whether we have data or not, I'm at your service, Sir.",
       sender: "ai",
       timestamp: new Date(),
     },
@@ -30,6 +35,7 @@ const ChatSection = () => {
   const [loading, setLoading] = useState(false);
   const [voiceOn, setVoiceOn] = useState(false);
   const [online, setOnline] = useState(navigator.onLine);
+  const [ollama, setOllama] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -37,9 +43,12 @@ const ChatSection = () => {
     const down = () => setOnline(false);
     window.addEventListener("online", up);
     window.addEventListener("offline", down);
+    ollamaAvailable().then(setOllama);
+    const t = setInterval(() => ollamaAvailable().then(setOllama), 15000);
     return () => {
       window.removeEventListener("online", up);
       window.removeEventListener("offline", down);
+      clearInterval(t);
     };
   }, []);
 
@@ -54,18 +63,48 @@ const ChatSection = () => {
     ]);
   };
 
-  const handleOffline = (userText: string) => {
+  const fallback = async (userText: string, aiId: string, history: Message[]) => {
+    // Try Ollama first if available, else offline rules
+    if (await ollamaAvailable()) {
+      try {
+        let full = "";
+        await ollamaChatStream(
+          [
+            ...history.map((m) => ({
+              role: m.sender === "user" ? ("user" as const) : ("assistant" as const),
+              content: m.content,
+            })),
+            { role: "user", content: userText },
+          ],
+          (delta) => {
+            full += delta;
+            setMessages((m) => m.map((x) => (x.id === aiId ? { ...x, content: full } : x)));
+          },
+        );
+        if (voiceOn && full) speak(full);
+        return;
+      } catch {
+        // fall through to rules
+      }
+    }
     const r = offlineRespond(userText);
-    addMessage(r.text, "ai");
+    setMessages((m) => m.map((x) => (x.id === aiId ? { ...x, content: r.text } : x)));
     if (voiceOn) speak(r.text);
   };
 
-  const handleOnline = async (userText: string, history: Message[]) => {
+  const handleSend = async (userText: string, history: Message[]) => {
     setLoading(true);
     const aiId = crypto.randomUUID();
     setMessages((m) => [...m, { id: aiId, content: "", sender: "ai", timestamp: new Date() }]);
+
+    if (!online) {
+      await fallback(userText, aiId, history);
+      setLoading(false);
+      return;
+    }
+
     try {
-      const res = await fetch(`${SUPABASE_URL}/functions/v1/jarvis-chat`, {
+      const res = await fetch(`${SUPABASE_URL}/functions/v1/exile-chat`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -87,10 +126,7 @@ const ChatSection = () => {
         if (res.status === 429) toast.error("Rate limit — try again in a moment.");
         else if (res.status === 402) toast.error("AI credits depleted.");
         else toast.error(err.error || "AI request failed");
-        // fallback to offline
-        const r = offlineRespond(userText);
-        setMessages((m) => m.map((x) => (x.id === aiId ? { ...x, content: r.text } : x)));
-        if (voiceOn) speak(r.text);
+        await fallback(userText, aiId, history);
         return;
       }
 
@@ -120,10 +156,8 @@ const ChatSection = () => {
         }
       }
       if (voiceOn && full) speak(full);
-    } catch (e) {
-      const r = offlineRespond(userText);
-      setMessages((m) => m.map((x) => (x.id === aiId ? { ...x, content: r.text } : x)));
-      if (voiceOn) speak(r.text);
+    } catch {
+      await fallback(userText, aiId, history);
     } finally {
       setLoading(false);
     }
@@ -134,8 +168,7 @@ const ChatSection = () => {
     if (!text || loading) return;
     setInput("");
     addMessage(text, "user");
-    if (online) handleOnline(text, messages);
-    else handleOffline(text);
+    handleSend(text, messages);
   };
 
   const startMic = () => {
@@ -153,17 +186,24 @@ const ChatSection = () => {
     rec.start();
   };
 
+  const modeLabel = online ? "CLOUD" : ollama ? "OLLAMA" : "LOCAL";
+
   return (
     <div className="h-[28rem] flex flex-col bg-slate-950 text-cyan-100">
       <div className="p-4 border-b border-cyan-500/30 bg-gradient-to-r from-slate-900 via-slate-950 to-slate-900 flex items-center justify-between">
         <h2 className="text-lg font-semibold flex items-center gap-2 tracking-widest">
           <span className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse" />
-          J.A.R.V.I.S.
+          EXILE
         </h2>
         <div className="flex items-center gap-2 text-xs">
+          {ollama && (
+            <span className="flex items-center gap-1 text-emerald-300">
+              <Cpu className="w-3 h-3" /> OLLAMA
+            </span>
+          )}
           <span className={`flex items-center gap-1 ${online ? "text-cyan-300" : "text-amber-400"}`}>
             {online ? <Wifi className="w-3 h-3" /> : <WifiOff className="w-3 h-3" />}
-            {online ? "ONLINE" : "OFFLINE"}
+            {modeLabel}
           </span>
           <Button
             size="sm"
@@ -220,7 +260,13 @@ const ChatSection = () => {
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && send()}
-          placeholder={online ? "Speak freely, Sir…" : "Offline mode — local commands only"}
+          placeholder={
+            online
+              ? "Speak freely, Sir…"
+              : ollama
+              ? "Offline · routing through local Ollama"
+              : "Offline mode — local commands only"
+          }
           className="flex-1 bg-slate-950 border-cyan-500/30 text-cyan-100 placeholder:text-cyan-500/50 focus-visible:ring-cyan-500/40"
         />
         <Button
