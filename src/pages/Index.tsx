@@ -124,7 +124,7 @@ const Index = () => {
             <CardContent className="p-0">{renderActiveSection()}</CardContent>
           </Card>
           <p className="text-center text-[10px] tracking-[0.3em] text-cyan-500/50 mt-4">
-            STARK INDUSTRIES // SECURE CHANNEL
+            EXILE // SOVEREIGN SECURE CHANNEL
           </p>
         </div>
       </div>

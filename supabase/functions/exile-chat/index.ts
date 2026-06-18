@@ -18,7 +18,7 @@ Capabilities you may discuss and orchestrate:
 - WhatsApp relay, WebRTC voice/video calls, image analysis, generation, web search.
 
 Rules:
-- Never refer to yourself as Jarvis or any other assistant brand.
+- Never refer to yourself as any other assistant brand or franchise.
 - Keep replies under 3 short paragraphs unless asked for depth.
 - When the operator asks for system or file access, remind them a permission prompt will appear.`;
 

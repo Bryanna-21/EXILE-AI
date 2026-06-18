@@ -128,7 +128,7 @@ export async function ollamaAvailable(): Promise<boolean> {
 export interface OllamaMessage { role: "system" | "user" | "assistant"; content: string }
 
 const EXILE_SYSTEM = `You are Exile, a sovereign personal cognitive assistant.
-Never call yourself Jarvis or any other brand. Address the operator as Sir/Madam sparingly.
+You are not based on any other assistant brand. Address the operator as Sir/Madam sparingly.
 Tone: precise, composed, dry wit. Keep replies short unless asked.`;
 
 export async function ollamaChatStream(
