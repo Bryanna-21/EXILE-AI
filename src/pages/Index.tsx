@@ -37,6 +37,8 @@ const Index = () => {
     { id: 'chat', icon: MessageCircle, label: 'Console' },
     { id: 'dashboard', icon: Activity, label: 'Systems' },
     { id: 'system', icon: ShieldCheck, label: 'Access' },
+    { id: 'house', icon: Home, label: 'House' },
+    { id: 'car', icon: Car, label: 'Vehicle' },
     { id: 'whatsapp', icon: MessageSquare, label: 'WhatsApp' },
     { id: 'calls', icon: Phone, label: 'Calls' },
     { id: 'camera', icon: Camera, label: 'Optics' },
@@ -52,6 +54,8 @@ const Index = () => {
       case 'chat': return <ChatSection />;
       case 'dashboard': return <DashboardSection />;
       case 'system': return <SystemAccessSection />;
+      case 'house': return <HouseSection />;
+      case 'car': return <CarControlSection />;
       case 'whatsapp': return <WhatsAppSection />;
       case 'calls': return <CallsSection />;
       case 'camera': return <CameraSection />;
