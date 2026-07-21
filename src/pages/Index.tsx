@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { MessageCircle, Camera, Search, Image as ImageIcon, Mic, Files, Share2, Cpu, Wifi, WifiOff, Activity, MessageSquare, Phone, ShieldCheck } from 'lucide-react';
+import { MessageCircle, Camera, Search, Image as ImageIcon, Mic, Files, Share2, Cpu, Wifi, WifiOff, Activity, MessageSquare, Phone, ShieldCheck, Home, Car } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import ChatSection from '@/components/ChatSection';
@@ -12,6 +12,8 @@ import WhatsAppSection from '@/components/WhatsAppSection';
 import CallsSection from '@/components/CallsSection';
 import DashboardSection from '@/components/DashboardSection';
 import SystemAccessSection from '@/components/SystemAccessSection';
+import HouseSection from '@/components/HouseSection';
+import CarControlSection from '@/components/CarControlSection';
 
 const Index = () => {
   const [activeSection, setActiveSection] = useState('chat');
