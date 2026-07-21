@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { MessageCircle, Camera, Search, Image as ImageIcon, Mic, Files, Share2, Cpu, Wifi, WifiOff, Activity, MessageSquare, Phone, ShieldCheck } from 'lucide-react';
+import { MessageCircle, Camera, Search, Image as ImageIcon, Mic, Files, Share2, Cpu, Wifi, WifiOff, Activity, MessageSquare, Phone, ShieldCheck, Home, Car } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import ChatSection from '@/components/ChatSection';
@@ -12,6 +12,8 @@ import WhatsAppSection from '@/components/WhatsAppSection';
 import CallsSection from '@/components/CallsSection';
 import DashboardSection from '@/components/DashboardSection';
 import SystemAccessSection from '@/components/SystemAccessSection';
+import HouseSection from '@/components/HouseSection';
+import CarControlSection from '@/components/CarControlSection';
 
 const Index = () => {
   const [activeSection, setActiveSection] = useState('chat');
@@ -35,6 +37,8 @@ const Index = () => {
     { id: 'chat', icon: MessageCircle, label: 'Console' },
     { id: 'dashboard', icon: Activity, label: 'Systems' },
     { id: 'system', icon: ShieldCheck, label: 'Access' },
+    { id: 'house', icon: Home, label: 'House' },
+    { id: 'car', icon: Car, label: 'Vehicle' },
     { id: 'whatsapp', icon: MessageSquare, label: 'WhatsApp' },
     { id: 'calls', icon: Phone, label: 'Calls' },
     { id: 'camera', icon: Camera, label: 'Optics' },
@@ -50,6 +54,8 @@ const Index = () => {
       case 'chat': return <ChatSection />;
       case 'dashboard': return <DashboardSection />;
       case 'system': return <SystemAccessSection />;
+      case 'house': return <HouseSection />;
+      case 'car': return <CarControlSection />;
       case 'whatsapp': return <WhatsAppSection />;
       case 'calls': return <CallsSection />;
       case 'camera': return <CameraSection />;
