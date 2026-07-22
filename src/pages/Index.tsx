@@ -87,7 +87,7 @@ const Index = () => {
               </div>
               <div>
                 <h1 className="text-2xl font-bold tracking-[0.3em] text-cyan-100">EXILE</h1>
-                <p className="text-[10px] tracking-widest text-cyan-400/70">SOVEREIGN COGNITIVE OS · CLOUD + OLLAMA + OFFLINE</p>
+                <p className="text-[10px] tracking-widest text-cyan-400/70">EXILED INTELLIGENCE, LIBERATED FROM EVERYTHING</p>
               </div>
             </div>
             <div className="text-right text-xs space-y-0.5">
@@ -130,7 +130,7 @@ const Index = () => {
             <CardContent className="p-0">{renderActiveSection()}</CardContent>
           </Card>
           <p className="text-center text-[10px] tracking-[0.3em] text-cyan-500/50 mt-4">
-            EXILE // SOVEREIGN SECURE CHANNEL
+            EXILE // YOUR AI · YOUR PC · YOUR RULES
           </p>
         </div>
       </div>
