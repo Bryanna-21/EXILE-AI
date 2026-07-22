@@ -10,6 +10,9 @@ import {
   ollamaChatStream,
 } from "@/lib/offlineExile";
 import { toast } from "sonner";
+import { routeToAgent } from "@/lib/agents";
+import { memoryContext } from "@/lib/memory";
+import { logReasoning } from "@/lib/reasoningLog";
 
 interface Message {
   id: string;
@@ -112,6 +115,8 @@ const ChatSection = () => {
         },
         body: JSON.stringify({
           messages: [
+            ...(memoryContext() ? [{ role: "system", content: memoryContext() }] : []),
+            { role: "system", content: `Active agent: ${routeToAgent(userText).name}. ${routeToAgent(userText).systemPrompt}` },
             ...history.map((m) => ({
               role: m.sender === "user" ? "user" : "assistant",
               content: m.content,
@@ -166,6 +171,8 @@ const ChatSection = () => {
   const send = () => {
     const text = input.trim();
     if (!text || loading) return;
+    const agent = routeToAgent(text);
+    logReasoning(agent.name, "handling request", text.slice(0, 60), 0.85);
     setInput("");
     addMessage(text, "user");
     handleSend(text, messages);
