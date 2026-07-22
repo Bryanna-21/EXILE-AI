@@ -91,10 +91,6 @@ const Index = () => {
                 <p className="text-[10px] tracking-widest text-cyan-400/70">EXILED INTELLIGENCE, LIBERATED FROM EVERYTHING</p>
               </div>
             </div>
-                <h1 className="text-2xl font-bold tracking-[0.3em] text-cyan-100">EXILE</h1>
-                <p className="text-[10px] tracking-widest text-cyan-400/70">EXILED INTELLIGENCE, LIBERATED FROM EVERYTHING</p>
-              </div>
-            </div>
             <div className="text-right text-xs space-y-0.5">
               <div className={`flex items-center justify-end gap-1 ${online ? 'text-cyan-300' : 'text-amber-400'}`}>
                 {online ? <Wifi className="w-3 h-3" /> : <WifiOff className="w-3 h-3" />}
