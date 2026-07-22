@@ -26,7 +26,7 @@ const ChatSection = () => {
     {
       id: "1",
       content:
-        "Exile online. All systems nominal. Whether we have data or not, I'm at your service, Sir.",
+        "Exile online. All systems nominal. EXiled Intelligence, Liberated from Everything — your AI, your PC, your rules. I'm at your service, Sir.",
       sender: "ai",
       timestamp: new Date(),
     },
