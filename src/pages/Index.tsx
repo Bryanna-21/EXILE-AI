@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { MessageCircle, Camera, Search, Image as ImageIcon, Mic, Files, Share2, Cpu, Wifi, WifiOff, Activity, MessageSquare, Phone, ShieldCheck, Home, Car } from 'lucide-react';
+import { MessageCircle, Camera, Search, Image as ImageIcon, Mic, Files, Share2, Wifi, WifiOff, Activity, MessageSquare, Phone, ShieldCheck, Home, Car, LayoutDashboard } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import ChatSection from '@/components/ChatSection';
@@ -14,9 +14,11 @@ import DashboardSection from '@/components/DashboardSection';
 import SystemAccessSection from '@/components/SystemAccessSection';
 import HouseSection from '@/components/HouseSection';
 import CarControlSection from '@/components/CarControlSection';
+import MissionControl from '@/components/MissionControl';
+import ExileLogo from '@/components/ExileLogo';
 
 const Index = () => {
-  const [activeSection, setActiveSection] = useState('chat');
+  const [activeSection, setActiveSection] = useState('mission');
   const [online, setOnline] = useState(typeof navigator !== 'undefined' ? navigator.onLine : true);
   const [time, setTime] = useState(new Date());
 
@@ -34,6 +36,7 @@ const Index = () => {
   }, []);
 
   const menuItems = [
+    { id: 'mission', icon: LayoutDashboard, label: 'Mission' },
     { id: 'chat', icon: MessageCircle, label: 'Console' },
     { id: 'dashboard', icon: Activity, label: 'Systems' },
     { id: 'system', icon: ShieldCheck, label: 'Access' },
@@ -51,6 +54,7 @@ const Index = () => {
 
   const renderActiveSection = () => {
     switch (activeSection) {
+      case 'mission': return <MissionControl onOpenSection={setActiveSection} />;
       case 'chat': return <ChatSection />;
       case 'dashboard': return <DashboardSection />;
       case 'system': return <SystemAccessSection />;
@@ -81,11 +85,12 @@ const Index = () => {
         <div className="px-4 pt-6 pb-4 max-w-3xl mx-auto">
           <div className="flex items-center justify-between border-b border-cyan-500/30 pb-3">
             <div className="flex items-center gap-3">
-              <div className="relative w-10 h-10 rounded-full border-2 border-cyan-400/60 flex items-center justify-center">
-                <Cpu className="w-5 h-5 text-cyan-300" />
-                <span className="absolute inset-0 rounded-full border border-cyan-400/30 animate-ping" />
-              </div>
+              <ExileLogo size={44} />
               <div>
+                <h1 className="text-2xl font-bold tracking-[0.3em] text-cyan-100">EXILE</h1>
+                <p className="text-[10px] tracking-widest text-cyan-400/70">EXILED INTELLIGENCE, LIBERATED FROM EVERYTHING</p>
+              </div>
+            </div>
                 <h1 className="text-2xl font-bold tracking-[0.3em] text-cyan-100">EXILE</h1>
                 <p className="text-[10px] tracking-widest text-cyan-400/70">EXILED INTELLIGENCE, LIBERATED FROM EVERYTHING</p>
               </div>
