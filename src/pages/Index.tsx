@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { MessageCircle, Camera, Search, Image as ImageIcon, Mic, Files, Share2, Wifi, WifiOff, Activity, MessageSquare, Phone, ShieldCheck, Home, Car, LayoutDashboard } from 'lucide-react';
+import { MessageCircle, Camera, Search, Image as ImageIcon, Mic, Files, Share2, Wifi, WifiOff, Activity, MessageSquare, Phone, ShieldCheck, Home, Car, LayoutDashboard, Wand2, Film, FileText, BookOpen } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import ChatSection from '@/components/ChatSection';
@@ -16,6 +16,10 @@ import HouseSection from '@/components/HouseSection';
 import CarControlSection from '@/components/CarControlSection';
 import MissionControl from '@/components/MissionControl';
 import ExileLogo from '@/components/ExileLogo';
+import ImageGenSection from '@/components/ImageGenSection';
+import VideoStoryboardSection from '@/components/VideoStoryboardSection';
+import DocumentSection from '@/components/DocumentSection';
+import ResearchSection from '@/components/ResearchSection';
 
 const Index = () => {
   const [activeSection, setActiveSection] = useState('mission');
@@ -38,6 +42,12 @@ const Index = () => {
   const menuItems = [
     { id: 'mission', icon: LayoutDashboard, label: 'Mission' },
     { id: 'chat', icon: MessageCircle, label: 'Console' },
+    { id: 'research', icon: BookOpen, label: 'Research' },
+    { id: 'generate', icon: Wand2, label: 'Render' },
+    { id: 'cinema', icon: Film, label: 'Cinema' },
+    { id: 'docs', icon: FileText, label: 'Docs' },
+    { id: 'analysis', icon: Search, label: 'Vision' },
+    { id: 'voice', icon: Mic, label: 'Voice' },
     { id: 'dashboard', icon: Activity, label: 'Systems' },
     { id: 'system', icon: ShieldCheck, label: 'Access' },
     { id: 'house', icon: Home, label: 'House' },
@@ -45,17 +55,18 @@ const Index = () => {
     { id: 'whatsapp', icon: MessageSquare, label: 'WhatsApp' },
     { id: 'calls', icon: Phone, label: 'Calls' },
     { id: 'camera', icon: Camera, label: 'Optics' },
-    { id: 'analysis', icon: Search, label: 'Analyze' },
-    { id: 'voice', icon: Mic, label: 'Voice' },
     { id: 'files', icon: Files, label: 'Vault' },
     { id: 'share', icon: Share2, label: 'Share' },
-    { id: 'generate', icon: ImageIcon, label: 'Render' },
   ];
 
   const renderActiveSection = () => {
     switch (activeSection) {
       case 'mission': return <MissionControl onOpenSection={setActiveSection} />;
       case 'chat': return <ChatSection />;
+      case 'research': return <ResearchSection />;
+      case 'generate': return <ImageGenSection />;
+      case 'cinema': return <VideoStoryboardSection />;
+      case 'docs': return <DocumentSection />;
       case 'dashboard': return <DashboardSection />;
       case 'system': return <SystemAccessSection />;
       case 'house': return <HouseSection />;
