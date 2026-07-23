@@ -8,3 +8,9 @@ verify_jwt = false
 
 [functions.car-proxy]
 verify_jwt = false
+
+[functions.exile-image]
+verify_jwt = false
+
+[functions.exile-analyze]
+verify_jwt = false
