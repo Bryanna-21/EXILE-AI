@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ScanFace, Delete, Lock } from "lucide-react";
 
 const PIN_KEY = "exile.pin.v1";
