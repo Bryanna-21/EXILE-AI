@@ -13,12 +13,14 @@ const LockScreen = ({ onUnlock }: LockScreenProps) => {
   const [pin, setPin] = useState("");
   const [error, setError] = useState("");
   const storedPin = localStorage.getItem(PIN_KEY) ?? "0000";
+  const unlockRef = useRef(onUnlock);
+  unlockRef.current = onUnlock;
 
   useEffect(() => {
     if (!scanning) return;
-    const t = setTimeout(() => onUnlock(), 1800);
+    const t = setTimeout(() => unlockRef.current(), 1800);
     return () => clearTimeout(t);
-  }, [scanning, onUnlock]);
+  }, [scanning]);
 
   const press = (d: string) => {
     const next = (pin + d).slice(0, 4);
