@@ -1,7 +1,11 @@
-import { useEffect, useState } from 'react';
-import { MessageCircle, Camera, Search, Image as ImageIcon, Mic, Files, Share2, Wifi, WifiOff, Activity, MessageSquare, Phone, ShieldCheck, Home, Car, LayoutDashboard, Wand2, Film, FileText, BookOpen } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import {
+  MessageCircle, Camera, Search, Mic, Files, Share2, Wifi, WifiOff, Activity,
+  MessageSquare, Phone, ShieldCheck, Home, Car, LayoutDashboard, Wand2, Film,
+  FileText, BookOpen, Settings, Send, X,
+} from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent } from '@/components/ui/card';
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import ChatSection from '@/components/ChatSection';
 import CameraSection from '@/components/CameraSection';
 import FilesSection from '@/components/FilesSection';
@@ -15,16 +19,48 @@ import SystemAccessSection from '@/components/SystemAccessSection';
 import HouseSection from '@/components/HouseSection';
 import CarControlSection from '@/components/CarControlSection';
 import MissionControl from '@/components/MissionControl';
-import ExileLogo from '@/components/ExileLogo';
 import ImageGenSection from '@/components/ImageGenSection';
 import VideoStoryboardSection from '@/components/VideoStoryboardSection';
 import DocumentSection from '@/components/DocumentSection';
 import ResearchSection from '@/components/ResearchSection';
+import ArcReactor from '@/components/ArcReactor';
+import LockScreen from '@/components/LockScreen';
+import { streamChat } from '@/lib/ai';
+import { offlineRespond, speak } from '@/lib/offlineExile';
+import { routeToAgent } from '@/lib/agents';
+import { memoryContext } from '@/lib/memory';
+import { logReasoning } from '@/lib/reasoningLog';
+
+const menuItems = [
+  { id: 'mission', icon: LayoutDashboard, label: 'Mission' },
+  { id: 'chat', icon: MessageCircle, label: 'Console' },
+  { id: 'research', icon: BookOpen, label: 'Research' },
+  { id: 'generate', icon: Wand2, label: 'Render' },
+  { id: 'cinema', icon: Film, label: 'Cinema' },
+  { id: 'docs', icon: FileText, label: 'Docs' },
+  { id: 'analysis', icon: Search, label: 'Vision' },
+  { id: 'voice', icon: Mic, label: 'Voice' },
+  { id: 'dashboard', icon: Activity, label: 'Systems' },
+  { id: 'system', icon: ShieldCheck, label: 'Access' },
+  { id: 'house', icon: Home, label: 'House' },
+  { id: 'car', icon: Car, label: 'Vehicle' },
+  { id: 'whatsapp', icon: MessageSquare, label: 'WhatsApp' },
+  { id: 'calls', icon: Phone, label: 'Calls' },
+  { id: 'camera', icon: Camera, label: 'Optics' },
+  { id: 'files', icon: Files, label: 'Vault' },
+  { id: 'share', icon: Share2, label: 'Share' },
+];
 
 const Index = () => {
-  const [activeSection, setActiveSection] = useState('mission');
+  const [locked, setLocked] = useState(true);
+  const [panel, setPanel] = useState<string | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [online, setOnline] = useState(typeof navigator !== 'undefined' ? navigator.onLine : true);
   const [time, setTime] = useState(new Date());
+  const [input, setInput] = useState('');
+  const [reply, setReply] = useState('');
+  const [state, setState] = useState<'idle' | 'listening' | 'thinking' | 'speaking'>('idle');
+  const recRef = useRef<any>(null);
 
   useEffect(() => {
     const t = setInterval(() => setTime(new Date()), 1000);
@@ -39,29 +75,9 @@ const Index = () => {
     };
   }, []);
 
-  const menuItems = [
-    { id: 'mission', icon: LayoutDashboard, label: 'Mission' },
-    { id: 'chat', icon: MessageCircle, label: 'Console' },
-    { id: 'research', icon: BookOpen, label: 'Research' },
-    { id: 'generate', icon: Wand2, label: 'Render' },
-    { id: 'cinema', icon: Film, label: 'Cinema' },
-    { id: 'docs', icon: FileText, label: 'Docs' },
-    { id: 'analysis', icon: Search, label: 'Vision' },
-    { id: 'voice', icon: Mic, label: 'Voice' },
-    { id: 'dashboard', icon: Activity, label: 'Systems' },
-    { id: 'system', icon: ShieldCheck, label: 'Access' },
-    { id: 'house', icon: Home, label: 'House' },
-    { id: 'car', icon: Car, label: 'Vehicle' },
-    { id: 'whatsapp', icon: MessageSquare, label: 'WhatsApp' },
-    { id: 'calls', icon: Phone, label: 'Calls' },
-    { id: 'camera', icon: Camera, label: 'Optics' },
-    { id: 'files', icon: Files, label: 'Vault' },
-    { id: 'share', icon: Share2, label: 'Share' },
-  ];
-
-  const renderActiveSection = () => {
-    switch (activeSection) {
-      case 'mission': return <MissionControl onOpenSection={setActiveSection} />;
+  const renderPanel = (id: string) => {
+    switch (id) {
+      case 'mission': return <MissionControl onOpenSection={setPanel} />;
       case 'chat': return <ChatSection />;
       case 'research': return <ResearchSection />;
       case 'generate': return <ImageGenSection />;
@@ -78,74 +94,181 @@ const Index = () => {
       case 'voice': return <VoiceSection />;
       case 'files': return <FilesSection />;
       case 'share': return <ShareSection />;
-      default: return <ChatSection />;
+      default: return null;
     }
   };
 
+  const ask = async (text: string) => {
+    if (!text.trim()) return;
+    setInput('');
+    setReply('');
+    setState('thinking');
+    const agent = routeToAgent(text);
+    logReasoning(agent.name, 'Received directive', text);
+
+    const runOffline = () => {
+      const r = offlineRespond(text);
+      setReply(r.text);
+      setState('speaking');
+      speak(r.text);
+      setTimeout(() => setState('idle'), 2500);
+    };
+
+    if (!online) return runOffline();
+
+    try {
+      let full = '';
+      await streamChat(
+        'exile-chat',
+        {
+          messages: [
+            ...(memoryContext() ? [{ role: 'system', content: memoryContext() }] : []),
+            { role: 'system', content: `Active agent: ${agent.name}. ${agent.systemPrompt}` },
+            { role: 'user', content: text },
+          ],
+        },
+        (d) => {
+          full += d;
+          setReply(full);
+          setState('speaking');
+        },
+      );
+      logReasoning(agent.name, 'Response delivered', full.slice(0, 120));
+      setTimeout(() => setState('idle'), 1200);
+    } catch {
+      runOffline();
+    }
+  };
+
+  const listen = () => {
+    const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SR) return;
+    const rec = new SR();
+    rec.lang = 'en-GB';
+    rec.interimResults = false;
+    rec.onresult = (e: any) => ask(e.results[0][0].transcript);
+    rec.onend = () => setState('idle');
+    recRef.current = rec;
+    setState('listening');
+    rec.start();
+  };
+
+  if (locked) return <LockScreen onUnlock={() => setLocked(false)} />;
+
   return (
-    <div className="min-h-screen bg-slate-950 text-cyan-100 relative overflow-hidden">
-      <div className="pointer-events-none absolute inset-0 opacity-30"
+    <div className="min-h-screen bg-slate-950 text-cyan-100 relative overflow-hidden flex flex-col">
+      <div
+        className="pointer-events-none absolute inset-0 opacity-40"
         style={{
           backgroundImage:
-            'radial-gradient(circle at 20% 10%, rgba(34,211,238,0.15), transparent 40%), radial-gradient(circle at 80% 80%, rgba(59,130,246,0.15), transparent 40%), linear-gradient(rgba(34,211,238,0.06) 1px, transparent 1px), linear-gradient(90deg, rgba(34,211,238,0.06) 1px, transparent 1px)',
-          backgroundSize: 'auto, auto, 40px 40px, 40px 40px',
+            'radial-gradient(circle at 50% 45%, rgba(56,189,248,0.14), transparent 55%), linear-gradient(rgba(34,211,238,0.05) 1px, transparent 1px), linear-gradient(90deg, rgba(34,211,238,0.05) 1px, transparent 1px)',
+          backgroundSize: 'auto, 44px 44px, 44px 44px',
         }}
       />
 
-      <div className="relative">
-        <div className="px-4 pt-6 pb-4 max-w-3xl mx-auto">
-          <div className="flex items-center justify-between border-b border-cyan-500/30 pb-3">
-            <div className="flex items-center gap-3">
-              <ExileLogo size={44} />
-              <div>
-                <h1 className="text-2xl font-bold tracking-[0.3em] text-cyan-100">EXILE</h1>
-                <p className="text-[10px] tracking-widest text-cyan-400/70">EXILED INTELLIGENCE, LIBERATED FROM EVERYTHING</p>
-              </div>
+      {/* top bar */}
+      <header className="relative flex items-center justify-between px-5 pt-5">
+        <div className="text-[10px] tracking-[0.4em] text-cyan-400/70 space-y-1">
+          <div className="flex items-center gap-1.5">
+            {online ? <Wifi className="w-3 h-3" /> : <WifiOff className="w-3 h-3 text-amber-400" />}
+            <span>{online ? 'DATA LINK ACTIVE' : 'LOCAL MODE'}</span>
+          </div>
+          <div className="font-mono text-cyan-400/50">{time.toLocaleTimeString()}</div>
+        </div>
+        <button
+          onClick={() => setSettingsOpen(true)}
+          aria-label="Settings"
+          className="w-11 h-11 rounded-full border border-cyan-500/40 bg-slate-900/50 flex items-center justify-center text-cyan-300 hover:bg-cyan-500/15 hover:shadow-[0_0_20px_rgba(34,211,238,0.35)] transition"
+        >
+          <Settings className="w-5 h-5" />
+        </button>
+      </header>
+
+      {/* core */}
+      <main className="relative flex-1 flex flex-col items-center justify-center gap-8 px-6">
+        <button onClick={listen} aria-label="Speak to EXILE">
+          <ArcReactor size={320} state={state} />
+        </button>
+        <div className="h-28 max-w-md text-center overflow-y-auto">
+          {reply ? (
+            <p className="text-sm leading-relaxed text-cyan-100/90 whitespace-pre-wrap">{reply}</p>
+          ) : (
+            <p className="text-[10px] tracking-[0.4em] text-cyan-400/50">
+              {state === 'listening' ? 'LISTENING…' : state === 'thinking' ? 'PROCESSING…' : 'EXILE STANDING BY'}
+            </p>
+          )}
+        </div>
+      </main>
+
+      {/* type bar */}
+      <footer className="relative px-5 pb-7">
+        <form
+          onSubmit={(e) => { e.preventDefault(); ask(input); }}
+          className="mx-auto max-w-xl flex items-center gap-2 rounded-full border border-cyan-500/35 bg-slate-900/70 backdrop-blur px-4 py-2 shadow-[0_0_30px_rgba(34,211,238,0.15)]"
+        >
+          <button type="button" onClick={listen} className="text-cyan-300/80 hover:text-cyan-100" aria-label="Voice input">
+            <Mic className="w-4 h-4" />
+          </button>
+          <input
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            placeholder="Speak or type a directive…"
+            className="flex-1 bg-transparent outline-none text-sm placeholder:text-cyan-500/40 text-cyan-50"
+          />
+          <Button type="submit" size="icon" variant="ghost" className="h-8 w-8 rounded-full text-cyan-300 hover:bg-cyan-500/15">
+            <Send className="w-4 h-4" />
+          </Button>
+        </form>
+        <p className="text-center text-[9px] tracking-[0.35em] text-cyan-500/40 mt-3">
+          EXILE // YOUR AI · YOUR PC · YOUR RULES
+        </p>
+      </footer>
+
+      {/* settings */}
+      <Sheet open={settingsOpen} onOpenChange={setSettingsOpen}>
+        <SheetContent side="right" className="w-full sm:max-w-sm bg-slate-950 border-cyan-500/30 text-cyan-100 overflow-y-auto">
+          <SheetHeader>
+            <SheetTitle className="text-cyan-100 tracking-[0.3em] text-sm">SETTINGS</SheetTitle>
+          </SheetHeader>
+          <div className="grid grid-cols-3 gap-2 mt-6">
+            {menuItems.map((item) => (
+              <button
+                key={item.id}
+                onClick={() => { setPanel(item.id); setSettingsOpen(false); }}
+                className="flex flex-col items-center gap-1 p-3 rounded-md border border-cyan-500/20 bg-slate-900/50 text-cyan-300/80 hover:bg-cyan-500/10 hover:text-cyan-100 transition"
+              >
+                <item.icon className="w-5 h-5" />
+                <span className="text-[9px] tracking-widest uppercase">{item.label}</span>
+              </button>
+            ))}
+          </div>
+          <button
+            onClick={() => { setSettingsOpen(false); setLocked(true); }}
+            className="mt-6 w-full rounded-md border border-cyan-500/30 py-2 text-[10px] tracking-[0.3em] text-cyan-300/80 hover:bg-cyan-500/10"
+          >
+            LOCK EXILE
+          </button>
+        </SheetContent>
+      </Sheet>
+
+      {/* section overlay */}
+      {panel && (
+        <div className="fixed inset-0 z-40 bg-slate-950/95 backdrop-blur-sm overflow-y-auto">
+          <div className="max-w-3xl mx-auto p-4">
+            <div className="flex items-center justify-between mb-3">
+              <span className="text-[10px] tracking-[0.35em] text-cyan-400/70 uppercase">
+                {menuItems.find((m) => m.id === panel)?.label}
+              </span>
+              <button onClick={() => setPanel(null)} aria-label="Close" className="text-cyan-300 hover:text-cyan-100">
+                <X className="w-5 h-5" />
+              </button>
             </div>
-            <div className="text-right text-xs space-y-0.5">
-              <div className={`flex items-center justify-end gap-1 ${online ? 'text-cyan-300' : 'text-amber-400'}`}>
-                {online ? <Wifi className="w-3 h-3" /> : <WifiOff className="w-3 h-3" />}
-                <span className="tracking-widest">{online ? 'DATA LINK ACTIVE' : 'LOCAL MODE'}</span>
-              </div>
-              <div className="text-cyan-400/70 tracking-widest font-mono">
-                {time.toLocaleTimeString()}
-              </div>
+            <div className="rounded-lg border border-cyan-500/30 bg-slate-900/60 overflow-hidden">
+              {renderPanel(panel)}
             </div>
           </div>
         </div>
-
-        <div className="px-4 mb-4 max-w-3xl mx-auto">
-          <div className="grid grid-cols-5 gap-2">
-            {menuItems.map((item) => {
-              const active = activeSection === item.id;
-              return (
-                <Button
-                  key={item.id}
-                  variant="ghost"
-                  onClick={() => setActiveSection(item.id)}
-                  className={`flex flex-col items-center gap-1 p-3 h-auto rounded-md border transition-all ${
-                    active
-                      ? 'bg-cyan-500/15 border-cyan-400/60 text-cyan-100 shadow-[0_0_20px_rgba(34,211,238,0.25)]'
-                      : 'bg-slate-900/40 border-cyan-500/20 text-cyan-300/70 hover:bg-cyan-500/10 hover:text-cyan-100'
-                  }`}
-                >
-                  <item.icon className="w-5 h-5" />
-                  <span className="text-[10px] tracking-widest uppercase">{item.label}</span>
-                </Button>
-              );
-            })}
-          </div>
-        </div>
-
-        <div className="px-4 pb-10 max-w-3xl mx-auto">
-          <Card className="bg-slate-900/60 backdrop-blur-sm border border-cyan-500/30 shadow-[0_0_40px_rgba(34,211,238,0.15)] overflow-hidden">
-            <CardContent className="p-0">{renderActiveSection()}</CardContent>
-          </Card>
-          <p className="text-center text-[10px] tracking-[0.3em] text-cyan-500/50 mt-4">
-            EXILE // YOUR AI · YOUR PC · YOUR RULES
-          </p>
-        </div>
-      </div>
+      )}
     </div>
   );
 };
