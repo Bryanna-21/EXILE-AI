@@ -1,16 +1,30 @@
 export const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL as string;
 export const SUPABASE_KEY = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY as string;
 
+/** When running the local build, point EXILE at the bundled Node API server. */
+export const LOCAL_API = (import.meta.env.VITE_EXILE_LOCAL_API as string | undefined) || "";
+
+export function endpoint(fn: string) {
+  return LOCAL_API ? `${LOCAL_API.replace(/\/$/, "")}/${fn}` : `${SUPABASE_URL}/functions/v1/${fn}`;
+}
+
+export function authHeaders(): Record<string, string> {
+  return LOCAL_API
+    ? { "Content-Type": "application/json" }
+    : { "Content-Type": "application/json", Authorization: `Bearer ${SUPABASE_KEY}` };
+}
+
 export async function streamChat(
   fn: "exile-chat" | "exile-analyze",
   body: any,
   onDelta: (text: string) => void,
 ): Promise<string> {
-  const res = await fetch(`${SUPABASE_URL}/functions/v1/${fn}`, {
+  const res = await fetch(endpoint(fn), {
     method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${SUPABASE_KEY}` },
+    headers: authHeaders(),
     body: JSON.stringify(body),
   });
+
   if (!res.ok || !res.body) {
     const err = await res.json().catch(() => ({ error: "Request failed" }));
     throw new Error(err.error || `HTTP ${res.status}`);
@@ -45,11 +59,12 @@ export async function streamImage(
   onFrame: (dataUrl: string, isFinal: boolean) => void,
   model?: string,
 ): Promise<void> {
-  const res = await fetch(`${SUPABASE_URL}/functions/v1/exile-image`, {
+  const res = await fetch(endpoint("exile-image"), {
     method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${SUPABASE_KEY}` },
+    headers: authHeaders(),
     body: JSON.stringify({ prompt, model }),
   });
+
   if (!res.ok || !res.body) {
     const err = await res.json().catch(() => ({ error: "Image request failed" }));
     throw new Error(err.error || `HTTP ${res.status}`);
