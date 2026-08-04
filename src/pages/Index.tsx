@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import {
   MessageCircle, Camera, Search, Mic, Files, Share2, Wifi, WifiOff, Activity,
   MessageSquare, Phone, ShieldCheck, Home, Car, LayoutDashboard, Wand2, Film,
-  FileText, BookOpen, Settings, Send, X,
+  FileText, BookOpen, Settings, Send, X, AudioLines, Grid3x3,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
@@ -23,10 +23,14 @@ import ImageGenSection from '@/components/ImageGenSection';
 import VideoStoryboardSection from '@/components/VideoStoryboardSection';
 import DocumentSection from '@/components/DocumentSection';
 import ResearchSection from '@/components/ResearchSection';
-import ArcReactor from '@/components/ArcReactor';
+import VoiceStudio from '@/components/VoiceStudio';
+import AppsSection from '@/components/AppsSection';
+import ArcReactor, { ReactorDock } from '@/components/ArcReactor';
 import LockScreen from '@/components/LockScreen';
 import { streamChat } from '@/lib/ai';
-import { offlineRespond, speak } from '@/lib/offlineExile';
+import { offlineRespond } from '@/lib/offlineExile';
+import { speakWithProfile } from '@/lib/voiceProfiles';
+import { micLevelMeter, speechLevelMeter, LevelMeter } from '@/lib/audioLevel';
 import { routeToAgent } from '@/lib/agents';
 import { memoryContext } from '@/lib/memory';
 import { logReasoning } from '@/lib/reasoningLog';
@@ -39,6 +43,8 @@ const menuItems = [
   { id: 'cinema', icon: Film, label: 'Cinema' },
   { id: 'docs', icon: FileText, label: 'Docs' },
   { id: 'analysis', icon: Search, label: 'Vision' },
+  { id: 'voicestudio', icon: AudioLines, label: 'Voice Lab' },
+  { id: 'apps', icon: Grid3x3, label: 'Apps' },
   { id: 'voice', icon: Mic, label: 'Voice' },
   { id: 'dashboard', icon: Activity, label: 'Systems' },
   { id: 'system', icon: ShieldCheck, label: 'Access' },
@@ -51,6 +57,10 @@ const menuItems = [
   { id: 'share', icon: Share2, label: 'Share' },
 ];
 
+/** Panels that display large media → reactor docks bottom-right. */
+const MEDIA_PANELS = new Set(['generate', 'cinema', 'camera', 'analysis', 'docs', 'files']);
+
+
 const Index = () => {
   const [locked, setLocked] = useState(true);
   const [panel, setPanel] = useState<string | null>(null);
@@ -60,7 +70,9 @@ const Index = () => {
   const [input, setInput] = useState('');
   const [reply, setReply] = useState('');
   const [state, setState] = useState<'idle' | 'listening' | 'thinking' | 'speaking'>('idle');
+  const [level, setLevel] = useState(0);
   const recRef = useRef<any>(null);
+  const meterRef = useRef<LevelMeter | null>(null);
 
   useEffect(() => {
     const t = setInterval(() => setTime(new Date()), 1000);
@@ -72,8 +84,29 @@ const Index = () => {
       clearInterval(t);
       window.removeEventListener('online', up);
       window.removeEventListener('offline', down);
+      meterRef.current?.stop();
     };
   }, []);
+
+  const stopMeter = () => {
+    meterRef.current?.stop();
+    meterRef.current = null;
+    setLevel(0);
+  };
+
+  // Reactor docking: media panels → bottom-right, conversation → top-left, else center.
+  const dock: ReactorDock = panel && MEDIA_PANELS.has(panel)
+    ? 'bottom-right'
+    : panel || reply
+      ? 'top-left'
+      : 'center';
+  const reactorSize = dock === 'center' ? 320 : dock === 'bottom-right' ? 132 : 108;
+
+  const dockStyle: Record<ReactorDock, React.CSSProperties> = {
+    center: { top: '50%', left: '50%', transform: 'translate(-50%, -58%)' },
+    'top-left': { top: 16, left: 16, transform: 'none' },
+    'bottom-right': { top: 'calc(100% - 172px)', left: 'calc(100% - 172px)', transform: 'none' },
+  };
 
   const renderPanel = (id: string) => {
     switch (id) {
@@ -92,16 +125,29 @@ const Index = () => {
       case 'camera': return <CameraSection />;
       case 'analysis': return <ImageAnalysisSection />;
       case 'voice': return <VoiceSection />;
+      case 'voicestudio': return <VoiceStudio />;
+      case 'apps': return <AppsSection />;
       case 'files': return <FilesSection />;
       case 'share': return <ShareSection />;
       default: return null;
     }
   };
 
+  const say = (text: string) => {
+    stopMeter();
+    setState('speaking');
+    meterRef.current = speechLevelMeter(setLevel);
+    speakWithProfile(text, () => {
+      stopMeter();
+      setState('idle');
+    });
+  };
+
   const ask = async (text: string) => {
     if (!text.trim()) return;
     setInput('');
     setReply('');
+    stopMeter();
     setState('thinking');
     const agent = routeToAgent(text);
     logReasoning(agent.name, 'Received directive', text);
@@ -109,9 +155,7 @@ const Index = () => {
     const runOffline = () => {
       const r = offlineRespond(text);
       setReply(r.text);
-      setState('speaking');
-      speak(r.text);
-      setTimeout(() => setState('idle'), 2500);
+      say(r.text);
     };
 
     if (!online) return runOffline();
@@ -130,26 +174,37 @@ const Index = () => {
         (d) => {
           full += d;
           setReply(full);
-          setState('speaking');
         },
       );
       logReasoning(agent.name, 'Response delivered', full.slice(0, 120));
-      setTimeout(() => setState('idle'), 1200);
+      if (full) say(full);
+      else setState('idle');
     } catch {
       runOffline();
     }
   };
 
-  const listen = () => {
+  const listen = async () => {
     const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (!SR) return;
     const rec = new SR();
     rec.lang = 'en-GB';
     rec.interimResults = false;
-    rec.onresult = (e: any) => ask(e.results[0][0].transcript);
-    rec.onend = () => setState('idle');
+    rec.onresult = (e: any) => {
+      stopMeter();
+      ask(e.results[0][0].transcript);
+    };
+    rec.onend = () => {
+      if (meterRef.current) stopMeter();
+      setState((s) => (s === 'listening' ? 'idle' : s));
+    };
     recRef.current = rec;
     setState('listening');
+    try {
+      meterRef.current = await micLevelMeter(setLevel);
+    } catch {
+      /* level spikes are optional */
+    }
     rec.start();
   };
 
@@ -168,7 +223,7 @@ const Index = () => {
 
       {/* top bar */}
       <header className="relative flex items-center justify-between px-5 pt-5">
-        <div className="text-[10px] tracking-[0.4em] text-cyan-400/70 space-y-1">
+        <div className="text-[10px] tracking-[0.4em] text-cyan-400/70 space-y-1 pl-28">
           <div className="flex items-center gap-1.5">
             {online ? <Wifi className="w-3 h-3" /> : <WifiOff className="w-3 h-3 text-amber-400" />}
             <span>{online ? 'DATA LINK ACTIVE' : 'LOCAL MODE'}</span>
@@ -184,11 +239,18 @@ const Index = () => {
         </button>
       </header>
 
+      {/* docking arc reactor */}
+      <button
+        onClick={listen}
+        aria-label="Speak to EXILE"
+        className="fixed z-50 transition-all duration-700 ease-in-out"
+        style={dockStyle[dock]}
+      >
+        <ArcReactor size={reactorSize} state={state} amplitude={level} />
+      </button>
+
       {/* core */}
-      <main className="relative flex-1 flex flex-col items-center justify-center gap-8 px-6">
-        <button onClick={listen} aria-label="Speak to EXILE">
-          <ArcReactor size={320} state={state} />
-        </button>
+      <main className="relative flex-1 flex flex-col items-center justify-end gap-8 px-6 pb-4">
         <div className="h-28 max-w-md text-center overflow-y-auto">
           {reply ? (
             <p className="text-sm leading-relaxed text-cyan-100/90 whitespace-pre-wrap">{reply}</p>
@@ -199,6 +261,7 @@ const Index = () => {
           )}
         </div>
       </main>
+
 
       {/* type bar */}
       <footer className="relative px-5 pb-7">
