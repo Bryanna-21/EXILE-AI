@@ -320,7 +320,7 @@ const Index = () => {
       {/* section overlay */}
       {panel && (
         <div className="fixed inset-0 z-40 bg-slate-950/95 backdrop-blur-sm overflow-y-auto">
-          <div className="max-w-3xl mx-auto p-4">
+          <div className="max-w-5xl mx-auto p-4">
             <div className="flex items-center justify-between mb-3">
               <span className="text-[10px] tracking-[0.35em] text-cyan-400/70 uppercase">
                 {menuItems.find((m) => m.id === panel)?.label}
