@@ -236,7 +236,7 @@ const ChatSection = () => {
                 </div>
               )}
               <div
-                className={`max-w-[80%] px-3 py-2 rounded-md text-sm leading-relaxed border ${
+                className={`max-w-[88%] px-4 py-3 rounded-md text-base leading-7 whitespace-pre-wrap break-words border ${
                   m.sender === "user"
                     ? "bg-cyan-500/15 border-cyan-400/40 text-cyan-50"
                     : "bg-slate-900/80 border-cyan-500/20 text-cyan-100"
