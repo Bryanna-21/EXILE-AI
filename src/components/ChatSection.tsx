@@ -196,7 +196,7 @@ const ChatSection = () => {
   const modeLabel = online ? "CLOUD" : ollama ? "OLLAMA" : "LOCAL";
 
   return (
-    <div className="h-[28rem] flex flex-col bg-slate-950 text-cyan-100">
+    <div className="h-[78vh] min-h-[32rem] flex flex-col bg-slate-950 text-cyan-100">
       <div className="p-4 border-b border-cyan-500/30 bg-gradient-to-r from-slate-900 via-slate-950 to-slate-900 flex items-center justify-between">
         <h2 className="text-lg font-semibold flex items-center gap-2 tracking-widest">
           <span className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse" />
