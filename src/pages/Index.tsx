@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import {
   MessageCircle, Camera, Search, Mic, Files, Share2, Wifi, WifiOff, Activity,
   MessageSquare, Phone, ShieldCheck, Home, Car, LayoutDashboard, Wand2, Film,
-  FileText, BookOpen, Settings, Send, X, AudioLines, Grid3x3,
+  FileText, BookOpen, Settings, Send, X, AudioLines, Grid3x3, KeyRound,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
@@ -25,6 +25,7 @@ import DocumentSection from '@/components/DocumentSection';
 import ResearchSection from '@/components/ResearchSection';
 import VoiceStudio from '@/components/VoiceStudio';
 import AppsSection from '@/components/AppsSection';
+import ApiKeysSection from '@/components/ApiKeysSection';
 import ArcReactor, { ReactorDock } from '@/components/ArcReactor';
 import LockScreen from '@/components/LockScreen';
 import { streamChat } from '@/lib/ai';
@@ -36,6 +37,7 @@ import { memoryContext } from '@/lib/memory';
 import { logReasoning } from '@/lib/reasoningLog';
 
 const menuItems = [
+  { id: 'api', icon: KeyRound, label: 'API' },
   { id: 'mission', icon: LayoutDashboard, label: 'Mission' },
   { id: 'chat', icon: MessageCircle, label: 'Console' },
   { id: 'research', icon: BookOpen, label: 'Research' },
@@ -110,6 +112,7 @@ const Index = () => {
 
   const renderPanel = (id: string) => {
     switch (id) {
+      case 'api': return <ApiKeysSection />;
       case 'mission': return <MissionControl onOpenSection={setPanel} />;
       case 'chat': return <ChatSection />;
       case 'research': return <ResearchSection />;
