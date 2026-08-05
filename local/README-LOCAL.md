@@ -17,13 +17,21 @@ control, research, image render, cinema storyboards, document intelligence.
 ## 2. Setup (2 minutes)
 
 ```bash
-# 1. unzip, then inside the folder:
-cp .env.example .env      # Windows:  copy .env.example .env
+# inside the folder:
+python main.py            # Windows:  py main.py
+```
 
-# 2. open .env and paste AT LEAST 2 API keys
-#    (Groq is free and fast: https://console.groq.com/keys)
+`main.py` checks Node, installs dependencies, starts the local API server and
+the UI, then opens your browser. No keys needed to boot.
 
-# 3. launch
+Then, inside EXILE: **Settings (gear) → API → paste your keys → CONNECT & RUN**.
+You can name keys anything (`GROQ_API_KEY`, `MY_API_KEY`, …), add up to 200, and
+optionally set a preferred provider. Keys are written to your local `.env` and
+applied instantly — no restart.
+
+Shell launchers still work as an alternative:
+
+```bash
 ./run.sh                  # macOS / Linux
 run.bat                   # Windows
 ```
