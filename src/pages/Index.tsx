@@ -254,9 +254,9 @@ const Index = () => {
 
       {/* core */}
       <main className="relative flex-1 flex flex-col items-center justify-end gap-8 px-6 pb-4">
-        <div className="h-28 max-w-md text-center overflow-y-auto">
+        <div className="w-full max-w-3xl max-h-[52vh] min-h-[7rem] text-center overflow-y-auto px-2">
           {reply ? (
-            <p className="text-sm leading-relaxed text-cyan-100/90 whitespace-pre-wrap">{reply}</p>
+            <p className="text-base sm:text-lg leading-8 text-cyan-100/90 whitespace-pre-wrap text-left">{reply}</p>
           ) : (
             <p className="text-[10px] tracking-[0.4em] text-cyan-400/50">
               {state === 'listening' ? 'LISTENING…' : state === 'thinking' ? 'PROCESSING…' : 'EXILE STANDING BY'}
