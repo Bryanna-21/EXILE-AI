@@ -196,7 +196,7 @@ const ChatSection = () => {
   const modeLabel = online ? "CLOUD" : ollama ? "OLLAMA" : "LOCAL";
 
   return (
-    <div className="h-[28rem] flex flex-col bg-slate-950 text-cyan-100">
+    <div className="h-[78vh] min-h-[32rem] flex flex-col bg-slate-950 text-cyan-100">
       <div className="p-4 border-b border-cyan-500/30 bg-gradient-to-r from-slate-900 via-slate-950 to-slate-900 flex items-center justify-between">
         <h2 className="text-lg font-semibold flex items-center gap-2 tracking-widest">
           <span className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse" />
@@ -236,7 +236,7 @@ const ChatSection = () => {
                 </div>
               )}
               <div
-                className={`max-w-[80%] px-3 py-2 rounded-md text-sm leading-relaxed border ${
+                className={`max-w-[88%] px-4 py-3 rounded-md text-base leading-7 whitespace-pre-wrap break-words border ${
                   m.sender === "user"
                     ? "bg-cyan-500/15 border-cyan-400/40 text-cyan-50"
                     : "bg-slate-900/80 border-cyan-500/20 text-cyan-100"
