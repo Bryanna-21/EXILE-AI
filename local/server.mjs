@@ -216,6 +216,87 @@ async function handleImage(body, res) {
   res.end();
 }
 
+// ---------- key management (Settings -> API tab) ----------
+const ENV_FILE = path.join(ROOT, ".env");
+const MAX_KEYS = 200;
+
+function readEnvFile() {
+  const map = new Map();
+  if (!fs.existsSync(ENV_FILE)) return map;
+  for (const line of fs.readFileSync(ENV_FILE, "utf8").split("\n")) {
+    const t = line.trim();
+    if (!t || t.startsWith("#")) continue;
+    const i = t.indexOf("=");
+    if (i === -1) continue;
+    map.set(t.slice(0, i).trim(), t.slice(i + 1).trim().replace(/^["']|["']$/g, ""));
+  }
+  return map;
+}
+
+function writeEnvFile(map) {
+  const body = [...map.entries()].map(([k, v]) => `${k}=${v}`).join("\n");
+  fs.writeFileSync(ENV_FILE, `${body}\n`, "utf8");
+}
+
+function listKeys() {
+  const map = readEnvFile();
+  return [...map.keys()]
+    .filter((k) => /_API_KEY$|_TOKEN$|_SID$/.test(k) && (map.get(k) || process.env[k]))
+    .slice(0, MAX_KEYS)
+    .map((name) => ({ name, set: !!(map.get(name) || process.env[name]) }));
+}
+
+function keysPayload() {
+  return {
+    keys: listKeys(),
+    providers: available().map((p) => p.id),
+    primary: process.env.EXILE_PRIMARY_PROVIDER || "",
+    ollama: OLLAMA,
+    max: MAX_KEYS,
+  };
+}
+
+/** Saves keys to .env and applies them to the running process immediately. */
+function saveKeys(body) {
+  const map = readEnvFile();
+  const incoming = Array.isArray(body.keys) ? body.keys.slice(0, MAX_KEYS) : [];
+  const kept = new Set();
+
+  for (const item of incoming) {
+    const name = String(item?.name || "").trim().toUpperCase().replace(/[^A-Z0-9_]/g, "_");
+    if (!name) continue;
+    kept.add(name);
+    const value = String(item?.value ?? "").trim();
+    if (value) {
+      map.set(name, value);
+      process.env[name] = value;
+    } else if (!map.has(name)) {
+      map.set(name, "");
+    }
+  }
+
+  // Remove key rows the user deleted in the UI.
+  for (const existing of listKeys().map((k) => k.name)) {
+    if (!kept.has(existing)) {
+      map.delete(existing);
+      delete process.env[existing];
+    }
+  }
+
+  const primary = String(body.primary || "").trim();
+  if (primary) {
+    map.set("EXILE_PRIMARY_PROVIDER", primary);
+    process.env.EXILE_PRIMARY_PROVIDER = primary;
+  } else {
+    map.delete("EXILE_PRIMARY_PROVIDER");
+    delete process.env.EXILE_PRIMARY_PROVIDER;
+  }
+
+  writeEnvFile(map);
+  console.log(`[exile] keys updated -> ${available().map((p) => p.id).join(", ") || "none"}`);
+  return keysPayload();
+}
+
 const server = http.createServer(async (req, res) => {
   if (req.method === "OPTIONS") { res.writeHead(204, CORS); return res.end(); }
   const url = new URL(req.url, `http://localhost:${PORT}`);
@@ -229,9 +310,11 @@ const server = http.createServer(async (req, res) => {
         ollama: OLLAMA,
       });
     }
+    if (url.pathname === "/keys" && req.method === "GET") return json(res, 200, keysPayload());
     if (req.method !== "POST") return json(res, 404, { error: "Not found" });
 
     const body = await readBody(req);
+    if (url.pathname === "/keys") return json(res, 200, saveKeys(body));
     if (url.pathname === "/exile-chat" || url.pathname === "/exile-analyze") return handleChat(body, res);
     if (url.pathname === "/exile-image") return handleImage(body, res);
     return json(res, 404, { error: "Not found" });
