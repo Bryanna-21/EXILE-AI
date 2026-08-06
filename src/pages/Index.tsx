@@ -325,18 +325,41 @@ const Index = () => {
         <ArcReactor size={reactorSize} state={state} amplitude={level} />
       </button>
 
-      {/* core */}
-      <main className="relative flex-1 flex flex-col items-center justify-end gap-8 px-6 pb-4">
-        <div className="w-full max-w-3xl max-h-[52vh] min-h-[7rem] text-center overflow-y-auto px-2">
-          {reply ? (
-            <p className="text-base sm:text-lg leading-8 text-cyan-100/90 whitespace-pre-wrap text-left">{reply}</p>
-          ) : (
-            <p className="text-[10px] tracking-[0.4em] text-cyan-400/50">
+      {/* core — persistent conversation feed */}
+      <main className="relative flex-1 flex flex-col items-center justify-end gap-4 px-6 pb-4">
+        <div
+          ref={feedRef}
+          className="w-full max-w-3xl max-h-[58vh] min-h-[7rem] overflow-y-auto px-2 space-y-3"
+        >
+          {turns.length === 0 ? (
+            <p className="text-center text-[10px] tracking-[0.4em] text-cyan-400/50">
               {state === 'listening' ? 'LISTENING…' : state === 'thinking' ? 'PROCESSING…' : 'EXILE STANDING BY'}
+            </p>
+          ) : (
+            turns.map((t) => (
+              <div
+                key={t.id}
+                className={
+                  t.role === 'user'
+                    ? 'ml-auto max-w-[88%] rounded-2xl rounded-br-sm border border-cyan-400/40 bg-cyan-500/10 px-4 py-2'
+                    : 'mr-auto max-w-[92%] rounded-2xl rounded-bl-sm border border-cyan-500/20 bg-slate-900/60 px-4 py-2'
+                }
+              >
+                <div className="text-[9px] tracking-[0.3em] text-cyan-400/60 mb-1">
+                  {t.role === 'user' ? 'YOU' : 'EXILE'}
+                </div>
+                <p className="text-base sm:text-lg leading-8 text-cyan-100/90 whitespace-pre-wrap">{t.text}</p>
+              </div>
+            ))
+          )}
+          {turns.length > 0 && state !== 'idle' && (
+            <p className="text-center text-[10px] tracking-[0.4em] text-cyan-400/50">
+              {state === 'listening' ? 'LISTENING…' : state === 'thinking' ? 'PROCESSING…' : 'SPEAKING…'}
             </p>
           )}
         </div>
       </main>
+
 
 
       {/* type bar */}
