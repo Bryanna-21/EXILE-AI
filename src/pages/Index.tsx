@@ -3,7 +3,9 @@ import {
   MessageCircle, Camera, Search, Mic, Files, Share2, Wifi, WifiOff, Activity,
   MessageSquare, Phone, ShieldCheck, Home, Car, LayoutDashboard, Wand2, Film,
   FileText, BookOpen, Settings, Send, X, AudioLines, Grid3x3, KeyRound,
+  History, Radio,
 } from 'lucide-react';
+
 import { Button } from '@/components/ui/button';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import ChatSection from '@/components/ChatSection';
@@ -35,12 +37,20 @@ import { micLevelMeter, speechLevelMeter, LevelMeter } from '@/lib/audioLevel';
 import { routeToAgent } from '@/lib/agents';
 import { memoryContext } from '@/lib/memory';
 import { logReasoning } from '@/lib/reasoningLog';
+import TranscriptSection from '@/components/TranscriptSection';
+import VoiceCommandsSection from '@/components/VoiceCommandsSection';
+import {
+  TranscriptTurn, listTurns, addTurn, updateTurn, addVoiceClip,
+} from '@/lib/conversation';
 
 const menuItems = [
   { id: 'api', icon: KeyRound, label: 'API' },
+  { id: 'transcript', icon: History, label: 'Chats' },
+  { id: 'voicecmd', icon: Radio, label: 'Voice Cmds' },
   { id: 'mission', icon: LayoutDashboard, label: 'Mission' },
   { id: 'chat', icon: MessageCircle, label: 'Console' },
   { id: 'research', icon: BookOpen, label: 'Research' },
+
   { id: 'generate', icon: Wand2, label: 'Render' },
   { id: 'cinema', icon: Film, label: 'Cinema' },
   { id: 'docs', icon: FileText, label: 'Docs' },
@@ -71,24 +81,38 @@ const Index = () => {
   const [time, setTime] = useState(new Date());
   const [input, setInput] = useState('');
   const [reply, setReply] = useState('');
+  const [turns, setTurns] = useState<TranscriptTurn[]>([]);
   const [state, setState] = useState<'idle' | 'listening' | 'thinking' | 'speaking'>('idle');
   const [level, setLevel] = useState(0);
   const recRef = useRef<any>(null);
   const meterRef = useRef<LevelMeter | null>(null);
+  const feedRef = useRef<HTMLDivElement | null>(null);
+  const mediaRef = useRef<MediaRecorder | null>(null);
+  const clipRef = useRef<BlobPart[]>([]);
+  const lastAudio = useRef<string | undefined>(undefined);
 
   useEffect(() => {
     const t = setInterval(() => setTime(new Date()), 1000);
     const up = () => setOnline(true);
     const down = () => setOnline(false);
+    const sync = () => setTurns(listTurns());
+    sync();
     window.addEventListener('online', up);
     window.addEventListener('offline', down);
+    window.addEventListener('exile:transcript', sync);
     return () => {
       clearInterval(t);
       window.removeEventListener('online', up);
       window.removeEventListener('offline', down);
+      window.removeEventListener('exile:transcript', sync);
       meterRef.current?.stop();
     };
   }, []);
+
+  useEffect(() => {
+    feedRef.current?.scrollTo({ top: feedRef.current.scrollHeight, behavior: 'smooth' });
+  }, [turns, reply]);
+
 
   const stopMeter = () => {
     meterRef.current?.stop();
@@ -99,7 +123,7 @@ const Index = () => {
   // Reactor docking: media panels → bottom-right, conversation → top-left, else center.
   const dock: ReactorDock = panel && MEDIA_PANELS.has(panel)
     ? 'bottom-right'
-    : panel || reply
+    : panel || turns.length > 0
       ? 'top-left'
       : 'center';
   const reactorSize = dock === 'center' ? 320 : dock === 'bottom-right' ? 132 : 108;
@@ -113,6 +137,8 @@ const Index = () => {
   const renderPanel = (id: string) => {
     switch (id) {
       case 'api': return <ApiKeysSection />;
+      case 'transcript': return <TranscriptSection />;
+      case 'voicecmd': return <VoiceCommandsSection />;
       case 'mission': return <MissionControl onOpenSection={setPanel} />;
       case 'chat': return <ChatSection />;
       case 'research': return <ResearchSection />;
@@ -146,20 +172,29 @@ const Index = () => {
     });
   };
 
-  const ask = async (text: string) => {
+  const ask = async (text: string, audio?: string) => {
     if (!text.trim()) return;
     setInput('');
     setReply('');
     stopMeter();
     setState('thinking');
+
+    addTurn('user', text.trim());
+    if (audio !== undefined) {
+      addVoiceClip({ id: crypto.randomUUID(), audio, transcript: text.trim(), at: Date.now() });
+    }
+    const exileTurn = addTurn('exile', '…');
+
     const agent = routeToAgent(text);
     logReasoning(agent.name, 'Received directive', text);
 
-    const runOffline = () => {
-      const r = offlineRespond(text);
-      setReply(r.text);
-      say(r.text);
+    const finish = (t: string) => {
+      updateTurn(exileTurn.id, t);
+      setReply(t);
+      say(t);
     };
+
+    const runOffline = () => finish(offlineRespond(text).text);
 
     if (!online) return runOffline();
 
@@ -171,17 +206,24 @@ const Index = () => {
           messages: [
             ...(memoryContext() ? [{ role: 'system', content: memoryContext() }] : []),
             { role: 'system', content: `Active agent: ${agent.name}. ${agent.systemPrompt}` },
-            { role: 'user', content: text },
+            ...listTurns()
+              .slice(-20)
+              .filter((t) => t.text && t.text !== '…' && t.id !== exileTurn.id)
+              .map((t) => ({ role: t.role === 'user' ? 'user' : 'assistant', content: t.text })),
           ],
         },
         (d) => {
           full += d;
           setReply(full);
+          updateTurn(exileTurn.id, full);
         },
       );
       logReasoning(agent.name, 'Response delivered', full.slice(0, 120));
-      if (full) say(full);
-      else setState('idle');
+      if (full) finish(full);
+      else {
+        updateTurn(exileTurn.id, '(no response)');
+        setState('idle');
+      }
     } catch {
       runOffline();
     }
@@ -193,12 +235,42 @@ const Index = () => {
     const rec = new SR();
     rec.lang = 'en-GB';
     rec.interimResults = false;
+
+    // record the spoken command so it can be replayed / deleted later
+    lastAudio.current = undefined;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mr = new MediaRecorder(stream);
+      clipRef.current = [];
+      mr.ondataavailable = (e) => clipRef.current.push(e.data);
+      mr.onstop = () => {
+        stream.getTracks().forEach((t) => t.stop());
+        const blob = new Blob(clipRef.current, { type: mr.mimeType || 'audio/webm' });
+        const reader = new FileReader();
+        reader.onloadend = () => { lastAudio.current = reader.result as string; };
+        reader.readAsDataURL(blob);
+      };
+      mr.start();
+      mediaRef.current = mr;
+    } catch {
+      /* recording is optional */
+    }
+
+    const stopClip = () => {
+      if (mediaRef.current && mediaRef.current.state !== 'inactive') mediaRef.current.stop();
+      mediaRef.current = null;
+    };
+
     rec.onresult = (e: any) => {
       stopMeter();
-      ask(e.results[0][0].transcript);
+      const transcript = e.results[0][0].transcript;
+      stopClip();
+      // give the FileReader a moment to finish encoding the clip
+      setTimeout(() => ask(transcript, lastAudio.current), 300);
     };
     rec.onend = () => {
       if (meterRef.current) stopMeter();
+      stopClip();
       setState((s) => (s === 'listening' ? 'idle' : s));
     };
     recRef.current = rec;
@@ -210,6 +282,7 @@ const Index = () => {
     }
     rec.start();
   };
+
 
   if (locked) return <LockScreen onUnlock={() => setLocked(false)} />;
 
@@ -252,18 +325,41 @@ const Index = () => {
         <ArcReactor size={reactorSize} state={state} amplitude={level} />
       </button>
 
-      {/* core */}
-      <main className="relative flex-1 flex flex-col items-center justify-end gap-8 px-6 pb-4">
-        <div className="w-full max-w-3xl max-h-[52vh] min-h-[7rem] text-center overflow-y-auto px-2">
-          {reply ? (
-            <p className="text-base sm:text-lg leading-8 text-cyan-100/90 whitespace-pre-wrap text-left">{reply}</p>
-          ) : (
-            <p className="text-[10px] tracking-[0.4em] text-cyan-400/50">
+      {/* core — persistent conversation feed */}
+      <main className="relative flex-1 flex flex-col items-center justify-end gap-4 px-6 pb-4">
+        <div
+          ref={feedRef}
+          className="w-full max-w-3xl max-h-[58vh] min-h-[7rem] overflow-y-auto px-2 space-y-3"
+        >
+          {turns.length === 0 ? (
+            <p className="text-center text-[10px] tracking-[0.4em] text-cyan-400/50">
               {state === 'listening' ? 'LISTENING…' : state === 'thinking' ? 'PROCESSING…' : 'EXILE STANDING BY'}
+            </p>
+          ) : (
+            turns.map((t) => (
+              <div
+                key={t.id}
+                className={
+                  t.role === 'user'
+                    ? 'ml-auto max-w-[88%] rounded-2xl rounded-br-sm border border-cyan-400/40 bg-cyan-500/10 px-4 py-2'
+                    : 'mr-auto max-w-[92%] rounded-2xl rounded-bl-sm border border-cyan-500/20 bg-slate-900/60 px-4 py-2'
+                }
+              >
+                <div className="text-[9px] tracking-[0.3em] text-cyan-400/60 mb-1">
+                  {t.role === 'user' ? 'YOU' : 'EXILE'}
+                </div>
+                <p className="text-base sm:text-lg leading-8 text-cyan-100/90 whitespace-pre-wrap">{t.text}</p>
+              </div>
+            ))
+          )}
+          {turns.length > 0 && state !== 'idle' && (
+            <p className="text-center text-[10px] tracking-[0.4em] text-cyan-400/50">
+              {state === 'listening' ? 'LISTENING…' : state === 'thinking' ? 'PROCESSING…' : 'SPEAKING…'}
             </p>
           )}
         </div>
       </main>
+
 
 
       {/* type bar */}
