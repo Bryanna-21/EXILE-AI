@@ -3,7 +3,7 @@ import {
   MessageCircle, Camera, Search, Mic, Files, Share2, Wifi, WifiOff, Activity,
   MessageSquare, Phone, ShieldCheck, Home, Car, LayoutDashboard, Wand2, Film,
   FileText, BookOpen, Settings, Send, X, AudioLines, Grid3x3, KeyRound,
-  History, Radio,
+  History, Radio, Contact2,
 } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
@@ -39,6 +39,7 @@ import { memoryContext } from '@/lib/memory';
 import { logReasoning } from '@/lib/reasoningLog';
 import TranscriptSection from '@/components/TranscriptSection';
 import VoiceCommandsSection from '@/components/VoiceCommandsSection';
+import ContactsSection from '@/components/ContactsSection';
 import {
   TranscriptTurn, listTurns, addTurn, updateTurn, addVoiceClip,
 } from '@/lib/conversation';
@@ -46,7 +47,9 @@ import {
 const menuItems = [
   { id: 'api', icon: KeyRound, label: 'API' },
   { id: 'transcript', icon: History, label: 'Chats' },
+  { id: 'contacts', icon: Contact2, label: 'Contacts' },
   { id: 'voicecmd', icon: Radio, label: 'Voice Cmds' },
+
   { id: 'mission', icon: LayoutDashboard, label: 'Mission' },
   { id: 'chat', icon: MessageCircle, label: 'Console' },
   { id: 'research', icon: BookOpen, label: 'Research' },
@@ -138,6 +141,8 @@ const Index = () => {
     switch (id) {
       case 'api': return <ApiKeysSection />;
       case 'transcript': return <TranscriptSection />;
+      case 'contacts': return <ContactsSection />;
+
       case 'voicecmd': return <VoiceCommandsSection />;
       case 'mission': return <MissionControl onOpenSection={setPanel} />;
       case 'chat': return <ChatSection />;
@@ -329,7 +334,7 @@ const Index = () => {
       <main className="relative flex-1 flex flex-col items-center justify-end gap-4 px-6 pb-4">
         <div
           ref={feedRef}
-          className="w-full max-w-3xl max-h-[58vh] min-h-[7rem] overflow-y-auto px-2 space-y-3"
+          className="w-full max-w-3xl max-h-[58vh] min-h-[7rem] overflow-y-auto px-2 space-y-5"
         >
           {turns.length === 0 ? (
             <p className="text-center text-[10px] tracking-[0.4em] text-cyan-400/50">
@@ -337,21 +342,21 @@ const Index = () => {
             </p>
           ) : (
             turns.map((t) => (
-              <div
-                key={t.id}
-                className={
-                  t.role === 'user'
-                    ? 'ml-auto max-w-[88%] rounded-2xl rounded-br-sm border border-cyan-400/40 bg-cyan-500/10 px-4 py-2'
-                    : 'mr-auto max-w-[92%] rounded-2xl rounded-bl-sm border border-cyan-500/20 bg-slate-900/60 px-4 py-2'
-                }
-              >
-                <div className="text-[9px] tracking-[0.3em] text-cyan-400/60 mb-1">
+              <div key={t.id} className={t.role === 'user' ? 'ml-auto max-w-[88%] text-right' : 'mr-auto max-w-[95%]'}>
+                <div className="text-[9px] tracking-[0.3em] text-cyan-400/50 mb-1">
                   {t.role === 'user' ? 'YOU' : 'EXILE'}
                 </div>
-                <p className="text-base sm:text-lg leading-8 text-cyan-100/90 whitespace-pre-wrap">{t.text}</p>
+                <p
+                  className={`text-base sm:text-lg leading-8 whitespace-pre-wrap ${
+                    t.role === 'user' ? 'text-cyan-300/85' : 'text-cyan-100/90'
+                  }`}
+                >
+                  {t.text}
+                </p>
               </div>
             ))
           )}
+
           {turns.length > 0 && state !== 'idle' && (
             <p className="text-center text-[10px] tracking-[0.4em] text-cyan-400/50">
               {state === 'listening' ? 'LISTENING…' : state === 'thinking' ? 'PROCESSING…' : 'SPEAKING…'}
