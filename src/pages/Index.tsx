@@ -123,7 +123,7 @@ const Index = () => {
   // Reactor docking: media panels → bottom-right, conversation → top-left, else center.
   const dock: ReactorDock = panel && MEDIA_PANELS.has(panel)
     ? 'bottom-right'
-    : panel || reply
+    : panel || turns.length > 0
       ? 'top-left'
       : 'center';
   const reactorSize = dock === 'center' ? 320 : dock === 'bottom-right' ? 132 : 108;
