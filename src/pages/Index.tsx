@@ -3,7 +3,7 @@ import {
   MessageCircle, Camera, Search, Mic, Files, Share2, Wifi, WifiOff, Activity,
   MessageSquare, Phone, ShieldCheck, Home, Car, LayoutDashboard, Wand2, Film,
   FileText, BookOpen, Settings, Send, X, AudioLines, Grid3x3, KeyRound,
-  History, Radio,
+  History, Radio, Contact2,
 } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
@@ -39,6 +39,7 @@ import { memoryContext } from '@/lib/memory';
 import { logReasoning } from '@/lib/reasoningLog';
 import TranscriptSection from '@/components/TranscriptSection';
 import VoiceCommandsSection from '@/components/VoiceCommandsSection';
+import ContactsSection from '@/components/ContactsSection';
 import {
   TranscriptTurn, listTurns, addTurn, updateTurn, addVoiceClip,
 } from '@/lib/conversation';
@@ -46,7 +47,9 @@ import {
 const menuItems = [
   { id: 'api', icon: KeyRound, label: 'API' },
   { id: 'transcript', icon: History, label: 'Chats' },
+  { id: 'contacts', icon: Contact2, label: 'Contacts' },
   { id: 'voicecmd', icon: Radio, label: 'Voice Cmds' },
+
   { id: 'mission', icon: LayoutDashboard, label: 'Mission' },
   { id: 'chat', icon: MessageCircle, label: 'Console' },
   { id: 'research', icon: BookOpen, label: 'Research' },
