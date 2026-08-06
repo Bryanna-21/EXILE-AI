@@ -3,7 +3,9 @@ import {
   MessageCircle, Camera, Search, Mic, Files, Share2, Wifi, WifiOff, Activity,
   MessageSquare, Phone, ShieldCheck, Home, Car, LayoutDashboard, Wand2, Film,
   FileText, BookOpen, Settings, Send, X, AudioLines, Grid3x3, KeyRound,
+  History, Radio,
 } from 'lucide-react';
+
 import { Button } from '@/components/ui/button';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import ChatSection from '@/components/ChatSection';
@@ -35,12 +37,20 @@ import { micLevelMeter, speechLevelMeter, LevelMeter } from '@/lib/audioLevel';
 import { routeToAgent } from '@/lib/agents';
 import { memoryContext } from '@/lib/memory';
 import { logReasoning } from '@/lib/reasoningLog';
+import TranscriptSection from '@/components/TranscriptSection';
+import VoiceCommandsSection from '@/components/VoiceCommandsSection';
+import {
+  TranscriptTurn, listTurns, addTurn, updateTurn, addVoiceClip,
+} from '@/lib/conversation';
 
 const menuItems = [
   { id: 'api', icon: KeyRound, label: 'API' },
+  { id: 'transcript', icon: History, label: 'Chats' },
+  { id: 'voicecmd', icon: Radio, label: 'Voice Cmds' },
   { id: 'mission', icon: LayoutDashboard, label: 'Mission' },
   { id: 'chat', icon: MessageCircle, label: 'Console' },
   { id: 'research', icon: BookOpen, label: 'Research' },
+
   { id: 'generate', icon: Wand2, label: 'Render' },
   { id: 'cinema', icon: Film, label: 'Cinema' },
   { id: 'docs', icon: FileText, label: 'Docs' },
