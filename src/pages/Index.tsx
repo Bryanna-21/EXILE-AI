@@ -334,7 +334,7 @@ const Index = () => {
       <main className="relative flex-1 flex flex-col items-center justify-end gap-4 px-6 pb-4">
         <div
           ref={feedRef}
-          className="w-full max-w-3xl max-h-[58vh] min-h-[7rem] overflow-y-auto px-2 space-y-3"
+          className="w-full max-w-3xl max-h-[58vh] min-h-[7rem] overflow-y-auto px-2 space-y-5"
         >
           {turns.length === 0 ? (
             <p className="text-center text-[10px] tracking-[0.4em] text-cyan-400/50">
@@ -342,22 +342,21 @@ const Index = () => {
             </p>
           ) : (
             turns.map((t) => (
-              <div
-                key={t.id}
-                className={
-                  t.role === 'user'
-                    ? 'ml-auto max-w-[88%] text-right'
-                    : 'mr-auto max-w-[95%]'
-
-                }
-              >
-                <div className="text-[9px] tracking-[0.3em] text-cyan-400/60 mb-1">
+              <div key={t.id} className={t.role === 'user' ? 'ml-auto max-w-[88%] text-right' : 'mr-auto max-w-[95%]'}>
+                <div className="text-[9px] tracking-[0.3em] text-cyan-400/50 mb-1">
                   {t.role === 'user' ? 'YOU' : 'EXILE'}
                 </div>
-                <p className="text-base sm:text-lg leading-8 text-cyan-100/90 whitespace-pre-wrap">{t.text}</p>
+                <p
+                  className={`text-base sm:text-lg leading-8 whitespace-pre-wrap ${
+                    t.role === 'user' ? 'text-cyan-300/85' : 'text-cyan-100/90'
+                  }`}
+                >
+                  {t.text}
+                </p>
               </div>
             ))
           )}
+
           {turns.length > 0 && state !== 'idle' && (
             <p className="text-center text-[10px] tracking-[0.4em] text-cyan-400/50">
               {state === 'listening' ? 'LISTENING…' : state === 'thinking' ? 'PROCESSING…' : 'SPEAKING…'}
