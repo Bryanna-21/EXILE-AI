@@ -81,24 +81,38 @@ const Index = () => {
   const [time, setTime] = useState(new Date());
   const [input, setInput] = useState('');
   const [reply, setReply] = useState('');
+  const [turns, setTurns] = useState<TranscriptTurn[]>([]);
   const [state, setState] = useState<'idle' | 'listening' | 'thinking' | 'speaking'>('idle');
   const [level, setLevel] = useState(0);
   const recRef = useRef<any>(null);
   const meterRef = useRef<LevelMeter | null>(null);
+  const feedRef = useRef<HTMLDivElement | null>(null);
+  const mediaRef = useRef<MediaRecorder | null>(null);
+  const clipRef = useRef<BlobPart[]>([]);
+  const lastAudio = useRef<string | undefined>(undefined);
 
   useEffect(() => {
     const t = setInterval(() => setTime(new Date()), 1000);
     const up = () => setOnline(true);
     const down = () => setOnline(false);
+    const sync = () => setTurns(listTurns());
+    sync();
     window.addEventListener('online', up);
     window.addEventListener('offline', down);
+    window.addEventListener('exile:transcript', sync);
     return () => {
       clearInterval(t);
       window.removeEventListener('online', up);
       window.removeEventListener('offline', down);
+      window.removeEventListener('exile:transcript', sync);
       meterRef.current?.stop();
     };
   }, []);
+
+  useEffect(() => {
+    feedRef.current?.scrollTo({ top: feedRef.current.scrollHeight, behavior: 'smooth' });
+  }, [turns, reply]);
+
 
   const stopMeter = () => {
     meterRef.current?.stop();
