@@ -137,6 +137,8 @@ const Index = () => {
   const renderPanel = (id: string) => {
     switch (id) {
       case 'api': return <ApiKeysSection />;
+      case 'transcript': return <TranscriptSection />;
+      case 'voicecmd': return <VoiceCommandsSection />;
       case 'mission': return <MissionControl onOpenSection={setPanel} />;
       case 'chat': return <ChatSection />;
       case 'research': return <ResearchSection />;
@@ -170,20 +172,29 @@ const Index = () => {
     });
   };
 
-  const ask = async (text: string) => {
+  const ask = async (text: string, audio?: string) => {
     if (!text.trim()) return;
     setInput('');
     setReply('');
     stopMeter();
     setState('thinking');
+
+    addTurn('user', text.trim());
+    if (audio !== undefined) {
+      addVoiceClip({ id: crypto.randomUUID(), audio, transcript: text.trim(), at: Date.now() });
+    }
+    const exileTurn = addTurn('exile', '…');
+
     const agent = routeToAgent(text);
     logReasoning(agent.name, 'Received directive', text);
 
-    const runOffline = () => {
-      const r = offlineRespond(text);
-      setReply(r.text);
-      say(r.text);
+    const finish = (t: string) => {
+      updateTurn(exileTurn.id, t);
+      setReply(t);
+      say(t);
     };
+
+    const runOffline = () => finish(offlineRespond(text).text);
 
     if (!online) return runOffline();
 
@@ -195,17 +206,24 @@ const Index = () => {
           messages: [
             ...(memoryContext() ? [{ role: 'system', content: memoryContext() }] : []),
             { role: 'system', content: `Active agent: ${agent.name}. ${agent.systemPrompt}` },
-            { role: 'user', content: text },
+            ...listTurns()
+              .slice(-20)
+              .filter((t) => t.text && t.text !== '…' && t.id !== exileTurn.id)
+              .map((t) => ({ role: t.role === 'user' ? 'user' : 'assistant', content: t.text })),
           ],
         },
         (d) => {
           full += d;
           setReply(full);
+          updateTurn(exileTurn.id, full);
         },
       );
       logReasoning(agent.name, 'Response delivered', full.slice(0, 120));
-      if (full) say(full);
-      else setState('idle');
+      if (full) finish(full);
+      else {
+        updateTurn(exileTurn.id, '(no response)');
+        setState('idle');
+      }
     } catch {
       runOffline();
     }
@@ -217,12 +235,42 @@ const Index = () => {
     const rec = new SR();
     rec.lang = 'en-GB';
     rec.interimResults = false;
+
+    // record the spoken command so it can be replayed / deleted later
+    lastAudio.current = undefined;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mr = new MediaRecorder(stream);
+      clipRef.current = [];
+      mr.ondataavailable = (e) => clipRef.current.push(e.data);
+      mr.onstop = () => {
+        stream.getTracks().forEach((t) => t.stop());
+        const blob = new Blob(clipRef.current, { type: mr.mimeType || 'audio/webm' });
+        const reader = new FileReader();
+        reader.onloadend = () => { lastAudio.current = reader.result as string; };
+        reader.readAsDataURL(blob);
+      };
+      mr.start();
+      mediaRef.current = mr;
+    } catch {
+      /* recording is optional */
+    }
+
+    const stopClip = () => {
+      if (mediaRef.current && mediaRef.current.state !== 'inactive') mediaRef.current.stop();
+      mediaRef.current = null;
+    };
+
     rec.onresult = (e: any) => {
       stopMeter();
-      ask(e.results[0][0].transcript);
+      const transcript = e.results[0][0].transcript;
+      stopClip();
+      // give the FileReader a moment to finish encoding the clip
+      setTimeout(() => ask(transcript, lastAudio.current), 300);
     };
     rec.onend = () => {
       if (meterRef.current) stopMeter();
+      stopClip();
       setState((s) => (s === 'listening' ? 'idle' : s));
     };
     recRef.current = rec;
@@ -234,6 +282,7 @@ const Index = () => {
     }
     rec.start();
   };
+
 
   if (locked) return <LockScreen onUnlock={() => setLocked(false)} />;
 
