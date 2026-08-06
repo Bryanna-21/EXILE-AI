@@ -141,6 +141,8 @@ const Index = () => {
     switch (id) {
       case 'api': return <ApiKeysSection />;
       case 'transcript': return <TranscriptSection />;
+      case 'contacts': return <ContactsSection />;
+
       case 'voicecmd': return <VoiceCommandsSection />;
       case 'mission': return <MissionControl onOpenSection={setPanel} />;
       case 'chat': return <ChatSection />;
@@ -344,8 +346,9 @@ const Index = () => {
                 key={t.id}
                 className={
                   t.role === 'user'
-                    ? 'ml-auto max-w-[88%] rounded-2xl rounded-br-sm border border-cyan-400/40 bg-cyan-500/10 px-4 py-2'
-                    : 'mr-auto max-w-[92%] rounded-2xl rounded-bl-sm border border-cyan-500/20 bg-slate-900/60 px-4 py-2'
+                    ? 'ml-auto max-w-[88%] text-right'
+                    : 'mr-auto max-w-[95%]'
+
                 }
               >
                 <div className="text-[9px] tracking-[0.3em] text-cyan-400/60 mb-1">
