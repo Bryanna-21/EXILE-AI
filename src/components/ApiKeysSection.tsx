@@ -103,6 +103,32 @@ export default function ApiKeysSection() {
         your local <span className="font-mono text-cyan-300">.env</span> and never leave this machine.
       </p>
 
+      <div className="rounded-md border border-cyan-500/20 p-3 space-y-2">
+        <div className="flex items-center justify-between text-[10px] tracking-[0.25em] uppercase">
+          <span className="text-cyan-400/60">Local engine</span>
+          <span className={base ? 'text-cyan-200' : 'text-amber-300'}>
+            {probing ? 'SCANNING…' : base ? `ONLINE · ${base}` : 'NOT DETECTED'}
+          </span>
+        </div>
+        <div className="flex gap-2">
+          <Input
+            value={base}
+            onChange={(e) => { setBase(e.target.value); setLocalApi(e.target.value); }}
+            placeholder="http://localhost:8787"
+            className="flex-1 bg-slate-900/60 border-cyan-500/25 text-cyan-100 text-xs font-mono placeholder:text-cyan-500/30"
+          />
+          <Button
+            onClick={() => probe(true)}
+            variant="ghost"
+            className="text-[10px] tracking-[0.2em] text-cyan-200 border border-cyan-500/25"
+          >
+            RETRY
+          </Button>
+        </div>
+      </div>
+
+
+
       <div className="space-y-2">
         {rows.map((row, i) => (
           <div key={i} className="flex gap-2">
