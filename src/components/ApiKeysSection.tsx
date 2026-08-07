@@ -66,7 +66,7 @@ export default function ApiKeysSection() {
       const keys = rows
         .filter((r) => r.name.trim())
         .map((r) => ({ name: r.name.trim().toUpperCase().replace(/[^A-Z0-9_]/g, '_'), value: r.value.trim() }));
-      const res = await fetch(`${base}/keys`, {
+      const res = await fetch(`${target}/keys`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ keys, primary: primary.trim() }),
