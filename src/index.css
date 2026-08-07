@@ -114,3 +114,9 @@
   90% { opacity: 1; }
   100% { transform: translateY(46%); opacity: 0; }
 }
+
+/* Installed-app safe areas (notches, home indicator) */
+body {
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  overscroll-behavior-y: none;
+}
