@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { KeyRound, Plus, Trash2, Zap, Loader2, CheckCircle2, AlertTriangle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { LOCAL_API } from '@/lib/ai';
+import { detectLocalApi, setLocalApi } from '@/lib/ai';
 
 type Row = { name: string; value: string };
 
@@ -20,21 +20,28 @@ export default function ApiKeysSection() {
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<{ ok: boolean; text: string } | null>(null);
   const [providers, setProviders] = useState<string[]>([]);
+  const [base, setBase] = useState('');
+  const [probing, setProbing] = useState(true);
 
-  const base = LOCAL_API ? LOCAL_API.replace(/\/$/, '') : '';
+  const loadFrom = async (url: string) => {
+    const d = await fetch(`${url}/keys`).then((r) => r.json());
+    const existing: Row[] = (d.keys || []).map((k: any) => ({ name: k.name, value: '' }));
+    setRows(existing.length ? [...existing, blank()] : [blank(), blank()]);
+    setPrimary(d.primary || '');
+    setProviders(d.providers || []);
+  };
 
-  useEffect(() => {
-    if (!base) return;
-    fetch(`${base}/keys`)
-      .then((r) => r.json())
-      .then((d) => {
-        const existing: Row[] = (d.keys || []).map((k: any) => ({ name: k.name, value: '' }));
-        setRows(existing.length ? [...existing, blank()] : [blank(), blank()]);
-        setPrimary(d.primary || '');
-        setProviders(d.providers || []);
-      })
-      .catch(() => {});
-  }, [base]);
+  const probe = async (force = false) => {
+    setProbing(true);
+    const found = await detectLocalApi(force);
+    setBase(found);
+    if (found) await loadFrom(found).catch(() => {});
+    setProbing(false);
+    return found;
+  };
+
+  useEffect(() => { probe(); }, []);
+
 
   const update = (i: number, patch: Partial<Row>) =>
     setRows((r) => r.map((row, idx) => (idx === i ? { ...row, ...patch } : row)));
