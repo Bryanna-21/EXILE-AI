@@ -2,10 +2,50 @@ export const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL as string;
 export const SUPABASE_KEY = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY as string;
 
 /** When running the local build, point EXILE at the bundled Node API server. */
-export const LOCAL_API = (import.meta.env.VITE_EXILE_LOCAL_API as string | undefined) || "";
+const BUILD_LOCAL_API = (import.meta.env.VITE_EXILE_LOCAL_API as string | undefined) || "";
+const STORED_LOCAL_API =
+  typeof localStorage !== "undefined" ? localStorage.getItem("exile_local_api") || "" : "";
+
+/** Resolved at runtime — the build-time var is baked in, so it is empty in downloaded builds. */
+export let LOCAL_API = (BUILD_LOCAL_API || STORED_LOCAL_API).replace(/\/$/, "");
+
+export function setLocalApi(url: string) {
+  LOCAL_API = url.replace(/\/$/, "");
+  try {
+    if (LOCAL_API) localStorage.setItem("exile_local_api", LOCAL_API);
+    else localStorage.removeItem("exile_local_api");
+  } catch { /* storage blocked */ }
+}
+
+const CANDIDATES = [8787, 8788, 8789].map((p) => `http://localhost:${p}`);
+
+let detection: Promise<string> | null = null;
+
+/** Probes /health on the usual local ports so the UI finds the server without env vars. */
+export function detectLocalApi(force = false): Promise<string> {
+  if (detection && !force) return detection;
+  detection = (async () => {
+    const tries = LOCAL_API ? [LOCAL_API, ...CANDIDATES] : CANDIDATES;
+    for (const base of tries) {
+      try {
+        const ctl = new AbortController();
+        const t = setTimeout(() => ctl.abort(), 1500);
+        const r = await fetch(`${base}/health`, { signal: ctl.signal });
+        clearTimeout(t);
+        if (r.ok) {
+          setLocalApi(base);
+          return LOCAL_API;
+        }
+      } catch { /* not running on this port */ }
+    }
+    setLocalApi("");
+    return "";
+  })();
+  return detection;
+}
 
 export function endpoint(fn: string) {
-  return LOCAL_API ? `${LOCAL_API.replace(/\/$/, "")}/${fn}` : `${SUPABASE_URL}/functions/v1/${fn}`;
+  return LOCAL_API ? `${LOCAL_API}/${fn}` : `${SUPABASE_URL}/functions/v1/${fn}`;
 }
 
 export function authHeaders(): Record<string, string> {
@@ -13,6 +53,7 @@ export function authHeaders(): Record<string, string> {
     ? { "Content-Type": "application/json" }
     : { "Content-Type": "application/json", Authorization: `Bearer ${SUPABASE_KEY}` };
 }
+
 
 export async function streamChat(
   fn: "exile-chat" | "exile-analyze",

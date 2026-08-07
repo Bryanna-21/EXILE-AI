@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { KeyRound, Plus, Trash2, Zap, Loader2, CheckCircle2, AlertTriangle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { LOCAL_API } from '@/lib/ai';
+import { detectLocalApi, setLocalApi } from '@/lib/ai';
 
 type Row = { name: string; value: string };
 
@@ -20,37 +20,53 @@ export default function ApiKeysSection() {
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<{ ok: boolean; text: string } | null>(null);
   const [providers, setProviders] = useState<string[]>([]);
+  const [base, setBase] = useState('');
+  const [probing, setProbing] = useState(true);
 
-  const base = LOCAL_API ? LOCAL_API.replace(/\/$/, '') : '';
+  const loadFrom = async (url: string) => {
+    const d = await fetch(`${url}/keys`).then((r) => r.json());
+    const existing: Row[] = (d.keys || []).map((k: any) => ({ name: k.name, value: '' }));
+    setRows(existing.length ? [...existing, blank()] : [blank(), blank()]);
+    setPrimary(d.primary || '');
+    setProviders(d.providers || []);
+  };
 
-  useEffect(() => {
-    if (!base) return;
-    fetch(`${base}/keys`)
-      .then((r) => r.json())
-      .then((d) => {
-        const existing: Row[] = (d.keys || []).map((k: any) => ({ name: k.name, value: '' }));
-        setRows(existing.length ? [...existing, blank()] : [blank(), blank()]);
-        setPrimary(d.primary || '');
-        setProviders(d.providers || []);
-      })
-      .catch(() => {});
-  }, [base]);
+  const probe = async (force = false) => {
+    setProbing(true);
+    const found = await detectLocalApi(force);
+    setBase(found);
+    if (found) await loadFrom(found).catch(() => {});
+    setProbing(false);
+    return found;
+  };
+
+  useEffect(() => { probe(); }, []);
+
 
   const update = (i: number, patch: Partial<Row>) =>
     setRows((r) => r.map((row, idx) => (idx === i ? { ...row, ...patch } : row)));
 
   const connect = async () => {
-    if (!base) {
-      setStatus({ ok: false, text: 'Local API not detected. Run EXILE with: python main.py' });
+    let target = base;
+    if (!target) target = await probe(true);
+    if (!target) {
+      setStatus({
+        ok: false,
+        text:
+          window.location.protocol === 'https:'
+            ? 'Local API not reachable from this hosted page. Run EXILE locally (python main.py) and open http://localhost:8080 — keys only work in the local/desktop build.'
+            : 'Local API not detected on ports 8787-8789. Start it with: python main.py',
+      });
       return;
     }
+
     setBusy(true);
     setStatus(null);
     try {
       const keys = rows
         .filter((r) => r.name.trim())
         .map((r) => ({ name: r.name.trim().toUpperCase().replace(/[^A-Z0-9_]/g, '_'), value: r.value.trim() }));
-      const res = await fetch(`${base}/keys`, {
+      const res = await fetch(`${target}/keys`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ keys, primary: primary.trim() }),
@@ -86,6 +102,32 @@ export default function ApiKeysSection() {
         Paste any provider key below — name it whatever you like (2 minimum, 200 maximum). Keys are written to
         your local <span className="font-mono text-cyan-300">.env</span> and never leave this machine.
       </p>
+
+      <div className="rounded-md border border-cyan-500/20 p-3 space-y-2">
+        <div className="flex items-center justify-between text-[10px] tracking-[0.25em] uppercase">
+          <span className="text-cyan-400/60">Local engine</span>
+          <span className={base ? 'text-cyan-200' : 'text-amber-300'}>
+            {probing ? 'SCANNING…' : base ? `ONLINE · ${base}` : 'NOT DETECTED'}
+          </span>
+        </div>
+        <div className="flex gap-2">
+          <Input
+            value={base}
+            onChange={(e) => { setBase(e.target.value); setLocalApi(e.target.value); }}
+            placeholder="http://localhost:8787"
+            className="flex-1 bg-slate-900/60 border-cyan-500/25 text-cyan-100 text-xs font-mono placeholder:text-cyan-500/30"
+          />
+          <Button
+            onClick={() => probe(true)}
+            variant="ghost"
+            className="text-[10px] tracking-[0.2em] text-cyan-200 border border-cyan-500/25"
+          >
+            RETRY
+          </Button>
+        </div>
+      </div>
+
+
 
       <div className="space-y-2">
         {rows.map((row, i) => (
