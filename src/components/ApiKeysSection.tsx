@@ -47,10 +47,19 @@ export default function ApiKeysSection() {
     setRows((r) => r.map((row, idx) => (idx === i ? { ...row, ...patch } : row)));
 
   const connect = async () => {
-    if (!base) {
-      setStatus({ ok: false, text: 'Local API not detected. Run EXILE with: python main.py' });
+    let target = base;
+    if (!target) target = await probe(true);
+    if (!target) {
+      setStatus({
+        ok: false,
+        text:
+          window.location.protocol === 'https:'
+            ? 'Local API not reachable from this hosted page. Run EXILE locally (python main.py) and open http://localhost:8080 — keys only work in the local/desktop build.'
+            : 'Local API not detected on ports 8787-8789. Start it with: python main.py',
+      });
       return;
     }
+
     setBusy(true);
     setStatus(null);
     try {
