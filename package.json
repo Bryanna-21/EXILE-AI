@@ -8,7 +8,9 @@
     "build": "vite build",
     "build:dev": "vite build --mode development",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "electron": "electron .",
+    "package:win": "vite build && electron-packager . EXILE --platform=win32 --arch=x64 --out=electron-release --overwrite"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.9.0",
@@ -63,6 +65,7 @@
     "zod": "^3.23.8"
   },
   "devDependencies": {
+    "@electron/packager": "^20.2.0",
     "@eslint/js": "^9.9.0",
     "@lovable.dev/vite-plugin-dev-server-bridge": "^1.0.2",
     "@lovable.dev/vite-plugin-hmr-gate": "^1.4.0",
@@ -72,6 +75,7 @@
     "@types/react-dom": "^18.3.0",
     "@vitejs/plugin-react-swc": "^3.5.0",
     "autoprefixer": "^10.4.20",
+    "electron": "^43.3.0",
     "eslint": "^9.9.0",
     "eslint-plugin-react-hooks": "^5.1.0-rc.0",
     "eslint-plugin-react-refresh": "^0.4.9",
@@ -82,5 +86,6 @@
     "typescript": "^5.5.3",
     "typescript-eslint": "^8.0.1",
     "vite": "^5.4.1"
-  }
+  },
+  "main": "electron/main.cjs"
 }
