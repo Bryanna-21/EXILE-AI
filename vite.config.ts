@@ -5,6 +5,8 @@ import { componentTagger } from "lovable-tagger";
 
 // https://vitejs.dev/config/
 export default defineConfig(({ mode }) => ({
+  // Relative base so the built app also works from file:// inside Electron.
+  base: "./",
   server: {
     host: "::",
     port: 8080,
