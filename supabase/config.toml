@@ -14,3 +14,10 @@ verify_jwt = false
 
 [functions.exile-analyze]
 verify_jwt = false
+
+[functions.exile-phone]
+verify_jwt = false
+
+[functions.exile-health]
+verify_jwt = false
+

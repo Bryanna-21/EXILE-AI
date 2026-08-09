@@ -14,7 +14,9 @@ export function setLocalApi(url: string) {
   try {
     if (LOCAL_API) localStorage.setItem("exile_local_api", LOCAL_API);
     else localStorage.removeItem("exile_local_api");
-  } catch { /* storage blocked */ }
+  } catch {
+    /* storage blocked */
+  }
 }
 
 const CANDIDATES = [8787, 8788, 8789].map((p) => `http://localhost:${p}`);
@@ -36,7 +38,9 @@ export function detectLocalApi(force = false): Promise<string> {
           setLocalApi(base);
           return LOCAL_API;
         }
-      } catch { /* not running on this port */ }
+      } catch {
+        /* not running on this port */
+      }
     }
     setLocalApi("");
     return "";
@@ -54,61 +58,208 @@ export function authHeaders(): Record<string, string> {
     : { "Content-Type": "application/json", Authorization: `Bearer ${SUPABASE_KEY}` };
 }
 
+/* ------------------------------------------------------------------ */
+/* Errors                                                              */
+/* ------------------------------------------------------------------ */
+
+export type AiFaultCode =
+  | "rate_limited"
+  | "no_credits"
+  | "unconfigured"
+  | "network"
+  | "timeout"
+  | "aborted"
+  | "server";
+
+export class AiError extends Error {
+  code: AiFaultCode;
+  status: number;
+  retryable: boolean;
+
+  constructor(code: AiFaultCode, message: string, status = 0) {
+    super(message);
+    this.name = "AiError";
+    this.code = code;
+    this.status = status;
+    this.retryable = code === "network" || code === "timeout" || code === "server" || code === "rate_limited";
+  }
+}
+
+function classify(status: number, body: string): AiError {
+  if (status === 429) return new AiError("rate_limited", "Reasoning core is rate limited. Retrying shortly.", status);
+  if (status === 402) return new AiError("no_credits", "AI credits exhausted. Top up to restore cloud reasoning.", status);
+  if (status === 401 || status === 403) return new AiError("unconfigured", "Reasoning core rejected the credentials.", status);
+  if (status >= 500) return new AiError("server", `Reasoning core fault (HTTP ${status}).`, status);
+  return new AiError("server", body?.slice(0, 200) || `HTTP ${status}`, status);
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** Fetch with a hard timeout, honouring an optional caller abort signal. */
+async function timedFetch(url: string, init: RequestInit, timeoutMs: number, signal?: AbortSignal) {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(new DOMException("timeout", "TimeoutError")), timeoutMs);
+  const onAbort = () => ctl.abort(new DOMException("aborted", "AbortError"));
+  signal?.addEventListener("abort", onAbort);
+  try {
+    return await fetch(url, { ...init, signal: ctl.signal });
+  } catch (e) {
+    const name = (e as Error)?.name;
+    if (name === "TimeoutError") throw new AiError("timeout", "Reasoning core did not respond in time.");
+    if (name === "AbortError") throw new AiError("aborted", "Directive cancelled.");
+    throw new AiError("network", "Cannot reach the reasoning core.");
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener("abort", onAbort);
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Chat                                                                */
+/* ------------------------------------------------------------------ */
+
+export type ModelTier = "fast" | "deep";
+
+export interface ToolCall {
+  id: string;
+  name: string;
+  args: Record<string, unknown>;
+}
+
+export interface StreamOptions {
+  /** Called once the stream ends if the model asked for tools instead of answering. */
+  onToolCalls?: (calls: ToolCall[]) => void;
+  signal?: AbortSignal;
+  /** Total attempts for retryable faults. Default 3. */
+  attempts?: number;
+  timeoutMs?: number;
+}
+
+interface PartialToolCall {
+  id: string;
+  name: string;
+  args: string;
+}
 
 export async function streamChat(
   fn: "exile-chat" | "exile-analyze",
-  body: any,
+  body: Record<string, unknown>,
   onDelta: (text: string) => void,
+  opts: StreamOptions = {},
 ): Promise<string> {
-  const res = await fetch(endpoint(fn), {
-    method: "POST",
-    headers: authHeaders(),
-    body: JSON.stringify(body),
-  });
+  const attempts = Math.max(1, opts.attempts ?? 3);
+  const timeoutMs = opts.timeoutMs ?? 90_000;
+  let lastError: AiError | null = null;
 
-  if (!res.ok || !res.body) {
-    const err = await res.json().catch(() => ({ error: "Request failed" }));
-    throw new Error(err.error || `HTTP ${res.status}`);
-  }
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-  let buf = "";
-  let full = "";
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buf += decoder.decode(value, { stream: true });
-    let nl: number;
-    while ((nl = buf.indexOf("\n")) !== -1) {
-      const line = buf.slice(0, nl).trim();
-      buf = buf.slice(nl + 1);
-      if (!line.startsWith("data:")) continue;
-      const data = line.slice(5).trim();
-      if (data === "[DONE]") continue;
-      try {
-        const j = JSON.parse(data);
-        const d = j.choices?.[0]?.delta?.content;
-        if (d) { full += d; onDelta(d); }
-      } catch {}
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      const res = await timedFetch(
+        endpoint(fn),
+        { method: "POST", headers: authHeaders(), body: JSON.stringify(body) },
+        timeoutMs,
+        opts.signal,
+      );
+
+      if (!res.ok || !res.body) {
+        const text = await res.text().catch(() => "");
+        let msg = text;
+        try {
+          msg = JSON.parse(text).error ?? text;
+        } catch {
+          /* plain text body */
+        }
+        throw classify(res.status, msg);
+      }
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+      let full = "";
+      const partials = new Map<number, PartialToolCall>();
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        let nl: number;
+        while ((nl = buf.indexOf("\n")) !== -1) {
+          const line = buf.slice(0, nl).trim();
+          buf = buf.slice(nl + 1);
+          if (!line.startsWith("data:")) continue;
+          const data = line.slice(5).trim();
+          if (data === "[DONE]") continue;
+          try {
+            const j = JSON.parse(data);
+            const delta = j.choices?.[0]?.delta;
+            if (delta?.content) {
+              full += delta.content;
+              onDelta(delta.content);
+            }
+            for (const tc of delta?.tool_calls ?? []) {
+              const idx = tc.index ?? 0;
+              const cur = partials.get(idx) ?? { id: tc.id ?? `call_${idx}`, name: "", args: "" };
+              if (tc.id) cur.id = tc.id;
+              if (tc.function?.name) cur.name += tc.function.name;
+              if (tc.function?.arguments) cur.args += tc.function.arguments;
+              partials.set(idx, cur);
+            }
+          } catch {
+            /* partial SSE frame */
+          }
+        }
+      }
+
+      if (partials.size && opts.onToolCalls) {
+        const calls: ToolCall[] = [...partials.values()]
+          .filter((p) => p.name)
+          .map((p) => {
+            let args: Record<string, unknown> = {};
+            try {
+              args = p.args ? JSON.parse(p.args) : {};
+            } catch {
+              args = {};
+            }
+            return { id: p.id, name: p.name, args };
+          });
+        if (calls.length) opts.onToolCalls(calls);
+      }
+
+      return full;
+    } catch (e) {
+      const err = e instanceof AiError ? e : new AiError("network", (e as Error).message);
+      lastError = err;
+      if (!err.retryable || attempt === attempts) throw err;
+      await sleep(400 * 2 ** (attempt - 1));
     }
   }
-  return full;
+
+  throw lastError ?? new AiError("server", "Unknown reasoning fault.");
 }
+
+/* ------------------------------------------------------------------ */
+/* Images                                                              */
+/* ------------------------------------------------------------------ */
 
 export async function streamImage(
   prompt: string,
   onFrame: (dataUrl: string, isFinal: boolean) => void,
   model?: string,
 ): Promise<void> {
-  const res = await fetch(endpoint("exile-image"), {
-    method: "POST",
-    headers: authHeaders(),
-    body: JSON.stringify({ prompt, model }),
-  });
+  const res = await timedFetch(
+    endpoint("exile-image"),
+    { method: "POST", headers: authHeaders(), body: JSON.stringify({ prompt, model }) },
+    180_000,
+  );
 
   if (!res.ok || !res.body) {
-    const err = await res.json().catch(() => ({ error: "Image request failed" }));
-    throw new Error(err.error || `HTTP ${res.status}`);
+    const text = await res.text().catch(() => "");
+    let msg = text;
+    try {
+      msg = JSON.parse(text).error ?? text;
+    } catch {
+      /* plain text body */
+    }
+    throw classify(res.status, msg);
   }
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
@@ -118,7 +269,6 @@ export async function streamImage(
     const { done, value } = await reader.read();
     if (done) break;
     buf += decoder.decode(value, { stream: true });
-    // parse SSE frames delimited by blank lines
     let sep: number;
     while ((sep = buf.indexOf("\n\n")) !== -1) {
       const raw = buf.slice(0, sep);
@@ -143,7 +293,7 @@ export async function streamImage(
       }
     }
   }
-  if (!sawFinal) throw new Error("Image stream ended without a final frame");
+  if (!sawFinal) throw new AiError("server", "Image stream ended without a final frame");
 }
 
 export async function fileToDataUrl(file: File): Promise<string> {
