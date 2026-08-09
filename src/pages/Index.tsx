@@ -229,9 +229,13 @@ const Index = () => {
         updateTurn(exileTurn.id, '(no response)');
         setState('idle');
       }
-    } catch {
-      runOffline();
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : 'unknown fault';
+      logReasoning(agent.name, 'Cloud link failed — local reasoning engaged', reason);
+      const local = offlineRespond(text).text;
+      finish(`${local}\n\n— cloud link unavailable (${reason}); answered locally.`);
     }
+
   };
 
   const listen = async () => {
