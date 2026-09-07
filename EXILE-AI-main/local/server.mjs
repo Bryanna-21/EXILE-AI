@@ -167,6 +167,9 @@ async function handleChat(body, res) {
           model: body.model || process.env[`${p.id.toUpperCase()}_MODEL`] || p.chat,
           messages,
           stream: true,
+          ...(Array.isArray(body.tools) && body.tools.length
+            ? { tools: body.tools, tool_choice: body.tool_choice || "auto" }
+            : {}),
         }),
       });
       if (!upstream.ok || !upstream.body) {
@@ -297,6 +300,26 @@ function saveKeys(body) {
   return keysPayload();
 }
 
+// ---------- static UI (serves the built app so one port runs everything) ----------
+const DIST = path.join(ROOT, "dist");
+const MIME = {
+  ".html": "text/html", ".js": "text/javascript", ".mjs": "text/javascript", ".css": "text/css",
+  ".json": "application/json", ".svg": "image/svg+xml", ".png": "image/png", ".jpg": "image/jpeg",
+  ".webmanifest": "application/manifest+json", ".ico": "image/x-icon", ".woff2": "font/woff2",
+};
+
+function serveStatic(pathname, res) {
+  if (!fs.existsSync(DIST)) return false;
+  const rel = pathname === "/" ? "index.html" : pathname.replace(/^\/+/, "");
+  let file = path.join(DIST, rel);
+  if (!file.startsWith(DIST)) return false;
+  if (!fs.existsSync(file) || fs.statSync(file).isDirectory()) file = path.join(DIST, "index.html");
+  if (!fs.existsSync(file)) return false;
+  res.writeHead(200, { "Content-Type": MIME[path.extname(file)] || "application/octet-stream", "Cache-Control": "no-cache" });
+  res.end(fs.readFileSync(file));
+  return true;
+}
+
 const server = http.createServer(async (req, res) => {
   if (req.method === "OPTIONS") { res.writeHead(204, CORS); return res.end(); }
   const url = new URL(req.url, `http://localhost:${PORT}`);
@@ -310,7 +333,29 @@ const server = http.createServer(async (req, res) => {
         ollama: OLLAMA,
       });
     }
+    if (url.pathname === "/exile-health") {
+      const providers = available().map((p) => p.id);
+      let ollamaOk = false;
+      try {
+        const r = await fetch(`${OLLAMA}/api/tags`, { signal: AbortSignal.timeout(1200) });
+        ollamaOk = r.ok;
+      } catch { /* ollama not running */ }
+      return json(res, 200, {
+        ok: providers.length > 0 || ollamaOk,
+        checkedAt: new Date().toISOString(),
+        totalMs: 0,
+        subsystems: {
+          reasoning: { ok: providers.length > 0, error: providers.length ? undefined : "no provider keys" },
+          ollama: { ok: ollamaOk, error: ollamaOk ? undefined : "not running" },
+          keys: { ok: allKeys().length >= 2, error: allKeys().length >= 2 ? undefined : "fewer than 2 keys" },
+          telephony: { ok: !!(process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && process.env.TWILIO_FROM_NUMBER) },
+          home: { ok: !!(process.env.HOME_ASSISTANT_URL && process.env.HOME_ASSISTANT_TOKEN) },
+          vehicle: { ok: !!(process.env.TESLA_API_KEY || process.env.SMARTCAR_API_KEY) },
+        },
+      });
+    }
     if (url.pathname === "/keys" && req.method === "GET") return json(res, 200, keysPayload());
+    if (req.method === "GET" && serveStatic(url.pathname, res)) return;
     if (req.method !== "POST") return json(res, 404, { error: "Not found" });
 
     const body = await readBody(req);
