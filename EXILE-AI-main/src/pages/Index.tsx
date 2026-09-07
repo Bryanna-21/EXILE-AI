@@ -353,13 +353,26 @@ const Index = () => {
           </div>
           <div className="font-mono text-cyan-400/50">{time.toLocaleTimeString()}</div>
         </div>
-        <button
-          onClick={() => setSettingsOpen(true)}
-          aria-label="Settings"
-          className="w-11 h-11 rounded-full border border-cyan-500/40 bg-slate-900/50 flex items-center justify-center text-cyan-300 hover:bg-cyan-500/15 hover:shadow-[0_0_20px_rgba(34,211,238,0.35)] transition"
-        >
-          <Settings className="w-5 h-5" />
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => {
+              const next: ModelTier = tier === 'fast' ? 'deep' : 'fast';
+              setTier(next);
+              try { localStorage.setItem('exile.tier', next); } catch { /* storage blocked */ }
+            }}
+            aria-label="Reasoning tier"
+            className="h-11 px-3 rounded-full border border-cyan-500/40 bg-slate-900/50 text-[9px] tracking-[0.3em] text-cyan-300 hover:bg-cyan-500/15 transition"
+          >
+            {tier === 'fast' ? 'FAST' : 'DEEP'}
+          </button>
+          <button
+            onClick={() => setSettingsOpen(true)}
+            aria-label="Settings"
+            className="w-11 h-11 rounded-full border border-cyan-500/40 bg-slate-900/50 flex items-center justify-center text-cyan-300 hover:bg-cyan-500/15 hover:shadow-[0_0_20px_rgba(34,211,238,0.35)] transition"
+          >
+            <Settings className="w-5 h-5" />
+          </button>
+        </div>
       </header>
 
       {/* docking arc reactor */}
