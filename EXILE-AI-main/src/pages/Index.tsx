@@ -491,6 +491,30 @@ const Index = () => {
           </div>
         </div>
       )}
+
+      {/* sensitive action approval */}
+      {pending && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/80 backdrop-blur-sm p-6">
+          <div className="w-full max-w-sm rounded-lg border border-cyan-500/40 bg-slate-900/95 p-5 shadow-[0_0_40px_rgba(34,211,238,0.25)]">
+            <p className="text-[10px] tracking-[0.35em] text-cyan-400/70 mb-2">AUTHORISATION REQUIRED</p>
+            <p className="text-sm text-cyan-100/90 leading-6">{pending.summary}</p>
+            <div className="mt-5 flex gap-2">
+              <button
+                onClick={() => { pending.resolve(false); setPending(null); }}
+                className="flex-1 rounded-md border border-cyan-500/30 py-2 text-[10px] tracking-[0.3em] text-cyan-300/80 hover:bg-cyan-500/10"
+              >
+                REFUSE
+              </button>
+              <button
+                onClick={() => { pending.resolve(true); setPending(null); }}
+                className="flex-1 rounded-md border border-cyan-400/60 bg-cyan-500/15 py-2 text-[10px] tracking-[0.3em] text-cyan-100 hover:bg-cyan-500/25"
+              >
+                APPROVE
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
