@@ -43,6 +43,10 @@ import ContactsSection from '@/components/ContactsSection';
 import {
   TranscriptTurn, listTurns, addTurn, updateTurn, addVoiceClip,
 } from '@/lib/conversation';
+import HealthSection from '@/components/HealthSection';
+import AuditSection from '@/components/AuditSection';
+import { runTool, type ToolContext } from '@/lib/tools';
+import { AiError, type ToolCall, type ModelTier } from '@/lib/ai';
 
 const menuItems = [
   { id: 'api', icon: KeyRound, label: 'API' },
