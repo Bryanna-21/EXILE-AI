@@ -1,0 +1,2 @@
+[run]
+dev = "cd EXILE-AI-main && npm run dev -- --host :: --port 8080"

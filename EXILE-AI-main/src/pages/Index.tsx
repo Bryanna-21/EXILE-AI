@@ -43,12 +43,18 @@ import ContactsSection from '@/components/ContactsSection';
 import {
   TranscriptTurn, listTurns, addTurn, updateTurn, addVoiceClip,
 } from '@/lib/conversation';
+import HealthSection from '@/components/HealthSection';
+import AuditSection from '@/components/AuditSection';
+import { runTool, type ToolContext } from '@/lib/tools';
+import { AiError, type ToolCall, type ModelTier } from '@/lib/ai';
 
 const menuItems = [
   { id: 'api', icon: KeyRound, label: 'API' },
   { id: 'transcript', icon: History, label: 'Chats' },
   { id: 'contacts', icon: Contact2, label: 'Contacts' },
   { id: 'voicecmd', icon: Radio, label: 'Voice Cmds' },
+  { id: 'health', icon: Activity, label: 'Health' },
+  { id: 'audit', icon: ShieldCheck, label: 'Audit' },
 
   { id: 'mission', icon: LayoutDashboard, label: 'Mission' },
   { id: 'chat', icon: MessageCircle, label: 'Console' },
@@ -86,6 +92,10 @@ const Index = () => {
   const [reply, setReply] = useState('');
   const [turns, setTurns] = useState<TranscriptTurn[]>([]);
   const [state, setState] = useState<'idle' | 'listening' | 'thinking' | 'speaking'>('idle');
+  const [tier, setTier] = useState<ModelTier>(
+    () => ((typeof localStorage !== 'undefined' && localStorage.getItem('exile.tier')) as ModelTier) || 'fast',
+  );
+  const [pending, setPending] = useState<{ summary: string; resolve: (ok: boolean) => void } | null>(null);
   const [level, setLevel] = useState(0);
   const recRef = useRef<any>(null);
   const meterRef = useRef<LevelMeter | null>(null);
@@ -144,6 +154,8 @@ const Index = () => {
       case 'contacts': return <ContactsSection />;
 
       case 'voicecmd': return <VoiceCommandsSection />;
+      case 'health': return <HealthSection />;
+      case 'audit': return <AuditSection />;
       case 'mission': return <MissionControl onOpenSection={setPanel} />;
       case 'chat': return <ChatSection />;
       case 'research': return <ResearchSection />;
@@ -199,43 +211,69 @@ const Index = () => {
       say(t);
     };
 
-    const runOffline = () => finish(offlineRespond(text).text);
+    if (!online) return finish(offlineRespond(text).text);
 
-    if (!online) return runOffline();
+    const convo: Record<string, unknown>[] = [
+      ...(memoryContext() ? [{ role: 'system', content: memoryContext() }] : []),
+      { role: 'system', content: `Active agent: ${agent.name}. ${agent.systemPrompt}` },
+      ...listTurns()
+        .slice(-20)
+        .filter((t) => t.text && t.text !== '…' && t.id !== exileTurn.id)
+        .map((t) => ({ role: t.role === 'user' ? 'user' : 'assistant', content: t.text })),
+    ];
+
+    const toolCtx: ToolContext = {
+      openSection: (id) => setPanel(id),
+      approve: (summary) => new Promise<boolean>((resolve) => setPending({ summary, resolve })),
+      renderImage: () => setPanel('generate'),
+    };
 
     try {
       let full = '';
-      await streamChat(
-        'exile-chat',
-        {
-          messages: [
-            ...(memoryContext() ? [{ role: 'system', content: memoryContext() }] : []),
-            { role: 'system', content: `Active agent: ${agent.name}. ${agent.systemPrompt}` },
-            ...listTurns()
-              .slice(-20)
-              .filter((t) => t.text && t.text !== '…' && t.id !== exileTurn.id)
-              .map((t) => ({ role: t.role === 'user' ? 'user' : 'assistant', content: t.text })),
-          ],
-        },
-        (d) => {
-          full += d;
-          setReply(full);
-          updateTurn(exileTurn.id, full);
-        },
-      );
+      for (let hop = 0; hop < 4; hop++) {
+        let calls: ToolCall[] = [];
+        let chunk = '';
+        await streamChat(
+          'exile-chat',
+          { messages: convo, tier },
+          (d) => {
+            chunk += d;
+            setReply(full + chunk);
+            updateTurn(exileTurn.id, full + chunk);
+          },
+          { onToolCalls: (c) => { calls = c; } },
+        );
+        full += chunk;
+        if (!calls.length) break;
+
+        convo.push({
+          role: 'assistant',
+          content: chunk || null,
+          tool_calls: calls.map((c) => ({
+            id: c.id,
+            type: 'function',
+            function: { name: c.name, arguments: JSON.stringify(c.args ?? {}) },
+          })),
+        });
+
+        for (const call of calls) {
+          logReasoning(agent.name, `Tool ${call.name}`, JSON.stringify(call.args ?? {}).slice(0, 120));
+          const result = await runTool(call, toolCtx);
+          convo.push({ role: 'tool', tool_call_id: result.id, content: result.output });
+        }
+      }
+
       logReasoning(agent.name, 'Response delivered', full.slice(0, 120));
-      if (full) finish(full);
+      if (full.trim()) finish(full);
       else {
         updateTurn(exileTurn.id, '(no response)');
         setState('idle');
       }
     } catch (err) {
-      const reason = err instanceof Error ? err.message : 'unknown fault';
+      const reason = err instanceof AiError || err instanceof Error ? err.message : 'unknown fault';
       logReasoning(agent.name, 'Cloud link failed — local reasoning engaged', reason);
-      const local = offlineRespond(text).text;
-      finish(`${local}\n\n— cloud link unavailable (${reason}); answered locally.`);
+      finish(`${offlineRespond(text).text}\n\n— cloud link unavailable (${reason}); answered locally.`);
     }
-
   };
 
   const listen = async () => {
@@ -315,13 +353,26 @@ const Index = () => {
           </div>
           <div className="font-mono text-cyan-400/50">{time.toLocaleTimeString()}</div>
         </div>
-        <button
-          onClick={() => setSettingsOpen(true)}
-          aria-label="Settings"
-          className="w-11 h-11 rounded-full border border-cyan-500/40 bg-slate-900/50 flex items-center justify-center text-cyan-300 hover:bg-cyan-500/15 hover:shadow-[0_0_20px_rgba(34,211,238,0.35)] transition"
-        >
-          <Settings className="w-5 h-5" />
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => {
+              const next: ModelTier = tier === 'fast' ? 'deep' : 'fast';
+              setTier(next);
+              try { localStorage.setItem('exile.tier', next); } catch { /* storage blocked */ }
+            }}
+            aria-label="Reasoning tier"
+            className="h-11 px-3 rounded-full border border-cyan-500/40 bg-slate-900/50 text-[9px] tracking-[0.3em] text-cyan-300 hover:bg-cyan-500/15 transition"
+          >
+            {tier === 'fast' ? 'FAST' : 'DEEP'}
+          </button>
+          <button
+            onClick={() => setSettingsOpen(true)}
+            aria-label="Settings"
+            className="w-11 h-11 rounded-full border border-cyan-500/40 bg-slate-900/50 flex items-center justify-center text-cyan-300 hover:bg-cyan-500/15 hover:shadow-[0_0_20px_rgba(34,211,238,0.35)] transition"
+          >
+            <Settings className="w-5 h-5" />
+          </button>
+        </div>
       </header>
 
       {/* docking arc reactor */}
@@ -436,6 +487,30 @@ const Index = () => {
             </div>
             <div className="rounded-lg border border-cyan-500/30 bg-slate-900/60 overflow-hidden">
               {renderPanel(panel)}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* sensitive action approval */}
+      {pending && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/80 backdrop-blur-sm p-6">
+          <div className="w-full max-w-sm rounded-lg border border-cyan-500/40 bg-slate-900/95 p-5 shadow-[0_0_40px_rgba(34,211,238,0.25)]">
+            <p className="text-[10px] tracking-[0.35em] text-cyan-400/70 mb-2">AUTHORISATION REQUIRED</p>
+            <p className="text-sm text-cyan-100/90 leading-6">{pending.summary}</p>
+            <div className="mt-5 flex gap-2">
+              <button
+                onClick={() => { pending.resolve(false); setPending(null); }}
+                className="flex-1 rounded-md border border-cyan-500/30 py-2 text-[10px] tracking-[0.3em] text-cyan-300/80 hover:bg-cyan-500/10"
+              >
+                REFUSE
+              </button>
+              <button
+                onClick={() => { pending.resolve(true); setPending(null); }}
+                className="flex-1 rounded-md border border-cyan-400/60 bg-cyan-500/15 py-2 text-[10px] tracking-[0.3em] text-cyan-100 hover:bg-cyan-500/25"
+              >
+                APPROVE
+              </button>
             </div>
           </div>
         </div>
