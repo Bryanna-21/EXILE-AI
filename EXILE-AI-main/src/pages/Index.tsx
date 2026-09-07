@@ -53,6 +53,8 @@ const menuItems = [
   { id: 'transcript', icon: History, label: 'Chats' },
   { id: 'contacts', icon: Contact2, label: 'Contacts' },
   { id: 'voicecmd', icon: Radio, label: 'Voice Cmds' },
+  { id: 'health', icon: Activity, label: 'Health' },
+  { id: 'audit', icon: ShieldCheck, label: 'Audit' },
 
   { id: 'mission', icon: LayoutDashboard, label: 'Mission' },
   { id: 'chat', icon: MessageCircle, label: 'Console' },
