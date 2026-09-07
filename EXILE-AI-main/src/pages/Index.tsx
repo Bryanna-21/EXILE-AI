@@ -154,6 +154,8 @@ const Index = () => {
       case 'contacts': return <ContactsSection />;
 
       case 'voicecmd': return <VoiceCommandsSection />;
+      case 'health': return <HealthSection />;
+      case 'audit': return <AuditSection />;
       case 'mission': return <MissionControl onOpenSection={setPanel} />;
       case 'chat': return <ChatSection />;
       case 'research': return <ResearchSection />;
