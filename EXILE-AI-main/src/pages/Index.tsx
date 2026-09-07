@@ -211,43 +211,69 @@ const Index = () => {
       say(t);
     };
 
-    const runOffline = () => finish(offlineRespond(text).text);
+    if (!online) return finish(offlineRespond(text).text);
 
-    if (!online) return runOffline();
+    const convo: Record<string, unknown>[] = [
+      ...(memoryContext() ? [{ role: 'system', content: memoryContext() }] : []),
+      { role: 'system', content: `Active agent: ${agent.name}. ${agent.systemPrompt}` },
+      ...listTurns()
+        .slice(-20)
+        .filter((t) => t.text && t.text !== '…' && t.id !== exileTurn.id)
+        .map((t) => ({ role: t.role === 'user' ? 'user' : 'assistant', content: t.text })),
+    ];
+
+    const toolCtx: ToolContext = {
+      openSection: (id) => setPanel(id),
+      approve: (summary) => new Promise<boolean>((resolve) => setPending({ summary, resolve })),
+      renderImage: () => setPanel('generate'),
+    };
 
     try {
       let full = '';
-      await streamChat(
-        'exile-chat',
-        {
-          messages: [
-            ...(memoryContext() ? [{ role: 'system', content: memoryContext() }] : []),
-            { role: 'system', content: `Active agent: ${agent.name}. ${agent.systemPrompt}` },
-            ...listTurns()
-              .slice(-20)
-              .filter((t) => t.text && t.text !== '…' && t.id !== exileTurn.id)
-              .map((t) => ({ role: t.role === 'user' ? 'user' : 'assistant', content: t.text })),
-          ],
-        },
-        (d) => {
-          full += d;
-          setReply(full);
-          updateTurn(exileTurn.id, full);
-        },
-      );
+      for (let hop = 0; hop < 4; hop++) {
+        let calls: ToolCall[] = [];
+        let chunk = '';
+        await streamChat(
+          'exile-chat',
+          { messages: convo, tier },
+          (d) => {
+            chunk += d;
+            setReply(full + chunk);
+            updateTurn(exileTurn.id, full + chunk);
+          },
+          { onToolCalls: (c) => { calls = c; } },
+        );
+        full += chunk;
+        if (!calls.length) break;
+
+        convo.push({
+          role: 'assistant',
+          content: chunk || null,
+          tool_calls: calls.map((c) => ({
+            id: c.id,
+            type: 'function',
+            function: { name: c.name, arguments: JSON.stringify(c.args ?? {}) },
+          })),
+        });
+
+        for (const call of calls) {
+          logReasoning(agent.name, `Tool ${call.name}`, JSON.stringify(call.args ?? {}).slice(0, 120));
+          const result = await runTool(call, toolCtx);
+          convo.push({ role: 'tool', tool_call_id: result.id, content: result.output });
+        }
+      }
+
       logReasoning(agent.name, 'Response delivered', full.slice(0, 120));
-      if (full) finish(full);
+      if (full.trim()) finish(full);
       else {
         updateTurn(exileTurn.id, '(no response)');
         setState('idle');
       }
     } catch (err) {
-      const reason = err instanceof Error ? err.message : 'unknown fault';
+      const reason = err instanceof AiError || err instanceof Error ? err.message : 'unknown fault';
       logReasoning(agent.name, 'Cloud link failed — local reasoning engaged', reason);
-      const local = offlineRespond(text).text;
-      finish(`${local}\n\n— cloud link unavailable (${reason}); answered locally.`);
+      finish(`${offlineRespond(text).text}\n\n— cloud link unavailable (${reason}); answered locally.`);
     }
-
   };
 
   const listen = async () => {
