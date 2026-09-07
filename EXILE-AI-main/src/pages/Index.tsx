@@ -92,6 +92,10 @@ const Index = () => {
   const [reply, setReply] = useState('');
   const [turns, setTurns] = useState<TranscriptTurn[]>([]);
   const [state, setState] = useState<'idle' | 'listening' | 'thinking' | 'speaking'>('idle');
+  const [tier, setTier] = useState<ModelTier>(
+    () => ((typeof localStorage !== 'undefined' && localStorage.getItem('exile.tier')) as ModelTier) || 'fast',
+  );
+  const [pending, setPending] = useState<{ summary: string; resolve: (ok: boolean) => void } | null>(null);
   const [level, setLevel] = useState(0);
   const recRef = useRef<any>(null);
   const meterRef = useRef<LevelMeter | null>(null);
