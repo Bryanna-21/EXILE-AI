@@ -10,7 +10,7 @@
  *   GET  /health         -> which providers are configured
  *
  * Supports up to 200 keys: any env var ending in _API_KEY is registered.
- * Minimum required: 2 keys (one chat provider + one fallback, or Ollama).
+ * Minimum required: 2 keys (one chat provider + one fallback).
  */
 import http from "node:http";
 import fs from "node:fs";
@@ -49,8 +49,6 @@ const PROVIDERS = [
   { id: "gemini",     key: "GEMINI_API_KEY",     base: "https://generativelanguage.googleapis.com/v1beta/openai", chat: "gemini-2.5-flash" },
   { id: "lovable",    key: "LOVABLE_API_KEY",    base: "https://ai.gateway.lovable.dev/v1",      chat: "google/gemini-3.6-flash",     image: "google/gemini-3.1-flash-image" },
 ];
-
-const OLLAMA = process.env.OLLAMA_URL || "http://localhost:11434";
 
 function available() {
   return PROVIDERS.filter((p) => !!process.env[p.key]);
@@ -111,40 +109,6 @@ async function pipeSSE(upstream, res) {
   res.end();
 }
 
-/** Ollama -> OpenAI-shaped SSE, so the browser code needs no changes. */
-async function ollamaStream(messages, res) {
-  const model = process.env.OLLAMA_MODEL || "llama3.2";
-  const upstream = await fetch(`${OLLAMA}/api/chat`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ model, messages, stream: true }),
-  });
-  if (!upstream.ok || !upstream.body) throw new Error(`Ollama HTTP ${upstream.status}`);
-
-  res.writeHead(200, { ...CORS, "Content-Type": "text/event-stream", "Cache-Control": "no-cache" });
-  const reader = upstream.body.getReader();
-  const decoder = new TextDecoder();
-  let buf = "";
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buf += decoder.decode(value, { stream: true });
-    let nl;
-    while ((nl = buf.indexOf("\n")) !== -1) {
-      const line = buf.slice(0, nl).trim();
-      buf = buf.slice(nl + 1);
-      if (!line) continue;
-      try {
-        const j = JSON.parse(line);
-        const delta = j.message?.content;
-        if (delta) res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: delta } }] })}\n\n`);
-      } catch { /* ignore partial lines */ }
-    }
-  }
-  res.write("data: [DONE]\n\n");
-  res.end();
-}
-
 const SYSTEM_PROMPT =
   process.env.EXILE_SYSTEM_PROMPT ||
   "You are EXILE — EXiled Intelligence, Liberated from Everything. Your AI. Your PC. Your rules. " +
@@ -183,15 +147,7 @@ async function handleChat(body, res) {
     }
   }
 
-  // Last resort: local Ollama
-  try {
-    console.log("[exile] chat via ollama");
-    return await ollamaStream(messages, res);
-  } catch (e) {
-    errors.push(`ollama: ${e.message}`);
-  }
-
-  json(res, 502, { error: "No provider could answer.", details: errors });
+  json(res, 502, { error: "No configured provider could answer.", details: errors });
 }
 
 async function handleImage(body, res) {
@@ -254,7 +210,6 @@ function keysPayload() {
     keys: listKeys(),
     providers: available().map((p) => p.id),
     primary: process.env.EXILE_PRIMARY_PROVIDER || "",
-    ollama: OLLAMA,
     max: MAX_KEYS,
   };
 }
@@ -330,23 +285,16 @@ const server = http.createServer(async (req, res) => {
         status: "online",
         providers: available().map((p) => p.id),
         keysDetected: allKeys().length,
-        ollama: OLLAMA,
       });
     }
     if (url.pathname === "/exile-health") {
       const providers = available().map((p) => p.id);
-      let ollamaOk = false;
-      try {
-        const r = await fetch(`${OLLAMA}/api/tags`, { signal: AbortSignal.timeout(1200) });
-        ollamaOk = r.ok;
-      } catch { /* ollama not running */ }
       return json(res, 200, {
-        ok: providers.length > 0 || ollamaOk,
+        ok: providers.length > 0,
         checkedAt: new Date().toISOString(),
         totalMs: 0,
         subsystems: {
           reasoning: { ok: providers.length > 0, error: providers.length ? undefined : "no provider keys" },
-          ollama: { ok: ollamaOk, error: ollamaOk ? undefined : "not running" },
           keys: { ok: allKeys().length >= 2, error: allKeys().length >= 2 ? undefined : "fewer than 2 keys" },
           telephony: { ok: !!(process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && process.env.TWILIO_FROM_NUMBER) },
           home: { ok: !!(process.env.HOME_ASSISTANT_URL && process.env.HOME_ASSISTANT_TOKEN) },
@@ -373,7 +321,7 @@ const server = http.createServer(async (req, res) => {
 server.listen(PORT, () => {
   const keys = allKeys();
   console.log(`\n  EXILE local API  ->  http://localhost:${PORT}`);
-  console.log(`  Providers ready: ${available().map((p) => p.id).join(", ") || "none (Ollama fallback)"}`);
+  console.log(`  Providers ready: ${available().map((p) => p.id).join(", ") || "none"}`);
   console.log(`  Keys detected:   ${keys.length} / 200 max`);
   if (keys.length < 2) console.log("  ! Add at least 2 API keys in .env for redundancy.\n");
   else console.log("");

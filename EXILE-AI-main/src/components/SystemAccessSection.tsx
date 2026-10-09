@@ -1,10 +1,9 @@
 import { useEffect, useState } from "react";
-import { ShieldCheck, FolderOpen, Image as ImageIcon, FileText, Mic, Camera, MapPin, Bell, Contact, HardDrive, Cpu, Wifi } from "lucide-react";
+import { ShieldCheck, FolderOpen, Image as ImageIcon, FileText, Mic, Camera, MapPin, Bell, Contact, HardDrive } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { toast } from "sonner";
-import { getOllamaConfig, setOllamaConfig, ollamaAvailable } from "@/lib/offlineExile";
 
 type PermStatus = "unknown" | "granted" | "denied" | "prompt" | "unsupported";
 
@@ -30,9 +29,6 @@ const SystemAccessSection = () => {
   const [images, setImages] = useState<PickedFile[]>([]);
   const [docs, setDocs] = useState<PickedFile[]>([]);
   const [dirName, setDirName] = useState<string>("");
-  const [ollamaUrl, setOllamaUrl] = useState(getOllamaConfig().url);
-  const [ollamaModel, setOllamaModel] = useState(getOllamaConfig().model);
-  const [ollamaOk, setOllamaOk] = useState<boolean | null>(null);
 
   const setStatus = (id: string, s: PermStatus) =>
     setGrants((g) => ({ ...g, [id]: s }));
@@ -54,7 +50,6 @@ const SystemAccessSection = () => {
     probe("camera", "camera");
     // @ts-ignore
     probe("microphone", "microphone");
-    ollamaAvailable().then(setOllamaOk);
   }, []);
 
   const requestCamera = async () => {
@@ -198,14 +193,6 @@ const SystemAccessSection = () => {
     s === "unsupported" ? "text-amber-300 border-amber-400/40" :
     "text-cyan-300 border-cyan-400/40";
 
-  const saveOllama = async () => {
-    setOllamaConfig(ollamaUrl, ollamaModel);
-    const ok = await ollamaAvailable();
-    setOllamaOk(ok);
-    if (ok) toast.success("Connected to local Ollama");
-    else toast.error("Could not reach Ollama. Run: OLLAMA_ORIGINS='*' ollama serve");
-  };
-
   return (
     <div className="h-[28rem] flex flex-col bg-slate-950 text-cyan-100">
       <div className="p-4 border-b border-cyan-500/30 flex items-center justify-between">
@@ -320,32 +307,7 @@ const SystemAccessSection = () => {
             </div>
           </section>
 
-          <section>
-            <h3 className="text-xs tracking-widest text-cyan-400/80 mb-2 flex items-center gap-2">
-              <Cpu className="w-3 h-3" /> LOCAL OLLAMA BRIDGE
-              <span className={`ml-auto text-[10px] flex items-center gap-1 ${ollamaOk ? "text-emerald-300" : "text-amber-300"}`}>
-                <Wifi className="w-3 h-3" /> {ollamaOk === null ? "checking…" : ollamaOk ? "REACHABLE" : "OFFLINE"}
-              </span>
-            </h3>
-            <div className="space-y-2">
-              <Input value={ollamaUrl} onChange={(e) => setOllamaUrl(e.target.value)}
-                placeholder="http://localhost:11434"
-                className="bg-slate-950 border-cyan-500/30 text-cyan-100" />
-              <div className="flex gap-2">
-                <Input value={ollamaModel} onChange={(e) => setOllamaModel(e.target.value)}
-                  placeholder="llama3.2"
-                  className="bg-slate-950 border-cyan-500/30 text-cyan-100" />
-                <Button onClick={saveOllama}
-                  className="bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-100 border border-cyan-400/40">
-                  Save & Test
-                </Button>
-              </div>
-              <p className="text-[10px] text-cyan-400/60 leading-relaxed">
-                Run locally: <code className="text-cyan-300">OLLAMA_ORIGINS="*" ollama serve</code> then <code className="text-cyan-300">ollama pull {ollamaModel}</code>.
-                When the cloud API is unreachable, Exile routes through this model.
-              </p>
-            </div>
-          </section>
+
         </div>
       </ScrollArea>
     </div>

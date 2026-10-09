@@ -12,7 +12,6 @@ control, research, image render, cinema storyboards, document intelligence.
 ## 1. Requirements
 
 - **Node.js 18+** — https://nodejs.org
-- *(optional)* **Ollama** for a fully offline brain — https://ollama.com
 
 ## 2. Setup (2 minutes)
 
@@ -47,13 +46,13 @@ Default unlock passcode: **0000** (change it in `src/components/LockScreen.tsx`)
 | --- | --- |
 | Minimum keys | **2** |
 | Maximum keys | **200** (any `*_API_KEY` in `.env` is auto-detected) |
-| Zero-key mode | Works via Ollama + built-in offline rules engine |
+| Zero-key mode | Works via the built-in offline rules engine |
 
 EXILE tries providers in order and automatically falls through on failure:
-`EXILE_PRIMARY_PROVIDER` → other configured keys → Ollama → offline rules.
+`EXILE_PRIMARY_PROVIDER` → other configured keys → offline rules.
 
 Supported out of the box: OpenAI, Groq, Google Gemini, OpenRouter, Together,
-DeepSeek, Mistral, xAI, Perplexity, Lovable AI Gateway, Ollama.
+DeepSeek, Mistral, xAI, Perplexity, Lovable AI Gateway.
 
 Check what loaded: `curl http://localhost:8787/health`
 
@@ -85,7 +84,7 @@ npm run build      # production bundle in dist/
 | --- | --- |
 | "No provider could answer" | Check keys in `.env`, then `curl localhost:8787/health` |
 | Mic/camera blocked | Browsers require `localhost` or HTTPS — use `localhost:8080` |
-| Ollama not used | Run `ollama serve` and `ollama pull llama3.2` |
+
 | Port in use | Change `EXILE_PORT` in `.env` |
 
 ## 7. Push to your own GitHub

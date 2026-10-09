@@ -64,7 +64,7 @@ export function offlineRespond(input: string): OfflineResponse {
   if (/\b(what can you do|help|capabilit)/.test(q)) {
     return {
       text:
-        "Offline I can tell time, do math, open sections of the app, and chat. With connection restored — or a local Ollama model — I gain full reasoning, web search, and image analysis.",
+        "Offline I can tell time, do math, open sections of the app, and chat. With connection restored, I gain full reasoning, web search, and image analysis.",
     };
   }
 
@@ -73,7 +73,7 @@ export function offlineRespond(input: string): OfflineResponse {
 
   return {
     text:
-      "I'm in offline mode, Sir — limited reasoning. Reconnect, or start a local Ollama model, and I'll handle that in full.",
+      "I'm in offline mode, Sir — limited reasoning. Reconnect, and I'll handle that in full.",
   };
 }
 
@@ -92,83 +92,4 @@ export function speak(text: string) {
     window.speechSynthesis.cancel();
     window.speechSynthesis.speak(u);
   } catch {}
-}
-
-// ---------- Ollama local-model bridge ----------
-// Used when the cloud API is unreachable. Operator must run `ollama serve`
-// locally with CORS enabled, e.g.
-//   OLLAMA_ORIGINS="*" ollama serve
-// then `ollama pull llama3.2` (or any model).
-
-const OLLAMA_URL_KEY = "exile.ollama.url";
-const OLLAMA_MODEL_KEY = "exile.ollama.model";
-
-export function getOllamaConfig() {
-  return {
-    url: localStorage.getItem(OLLAMA_URL_KEY) || "http://localhost:11434",
-    model: localStorage.getItem(OLLAMA_MODEL_KEY) || "llama3.2",
-  };
-}
-
-export function setOllamaConfig(url: string, model: string) {
-  localStorage.setItem(OLLAMA_URL_KEY, url);
-  localStorage.setItem(OLLAMA_MODEL_KEY, model);
-}
-
-export async function ollamaAvailable(): Promise<boolean> {
-  try {
-    const { url } = getOllamaConfig();
-    const r = await fetch(`${url}/api/tags`, { method: "GET" });
-    return r.ok;
-  } catch {
-    return false;
-  }
-}
-
-export interface OllamaMessage { role: "system" | "user" | "assistant"; content: string }
-
-const EXILE_SYSTEM = `You are Exile, a sovereign personal cognitive assistant.
-You are not based on any other assistant brand. Address the operator as Sir/Madam sparingly.
-Tone: precise, composed, dry wit. Keep replies short unless asked.`;
-
-export async function ollamaChatStream(
-  messages: OllamaMessage[],
-  onDelta: (chunk: string) => void,
-): Promise<string> {
-  const { url, model } = getOllamaConfig();
-  const res = await fetch(`${url}/api/chat`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model,
-      stream: true,
-      messages: [{ role: "system", content: EXILE_SYSTEM }, ...messages],
-    }),
-  });
-  if (!res.ok || !res.body) throw new Error(`Ollama error ${res.status}`);
-
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-  let buf = "";
-  let full = "";
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buf += decoder.decode(value, { stream: true });
-    let nl: number;
-    while ((nl = buf.indexOf("\n")) !== -1) {
-      const line = buf.slice(0, nl).trim();
-      buf = buf.slice(nl + 1);
-      if (!line) continue;
-      try {
-        const json = JSON.parse(line);
-        const delta = json.message?.content;
-        if (delta) {
-          full += delta;
-          onDelta(delta);
-        }
-      } catch {}
-    }
-  }
-  return full;
 }

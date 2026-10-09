@@ -12,7 +12,7 @@ export interface Capability {
 }
 
 export const CAPABILITIES: Capability[] = [
-  { id: 'chat', name: 'Console', icon: MessageCircle, status: 'live', note: 'Cloud → Local Ollama → Offline rules', section: 'chat' },
+  { id: 'chat', name: 'Console', icon: MessageCircle, status: 'live', note: 'Cloud → Offline rules', section: 'chat' },
   { id: 'research', name: 'Research Briefing', icon: BookOpen, status: 'live', note: 'Structured briefings with sources', section: 'research' },
   { id: 'render', name: 'Image Render', icon: Wand2, status: 'live', note: 'Streaming Gemini 3 Pro image', section: 'generate' },
   { id: 'cinema', name: 'Cinema Storyboard', icon: Film, status: 'live', note: '4-frame cinematic keyframes', section: 'cinema' },

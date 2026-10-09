@@ -1,14 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import { Bot, User, Send, Mic, Volume2, VolumeX, Wifi, WifiOff, Cpu } from "lucide-react";
+import { Bot, User, Send, Mic, Volume2, VolumeX, Wifi, WifiOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Input } from "@/components/ui/input";
-import {
-  offlineRespond,
-  speak,
-  ollamaAvailable,
-  ollamaChatStream,
-} from "@/lib/offlineExile";
+import { offlineRespond, speak } from "@/lib/offlineExile";
 import { toast } from "sonner";
 import { routeToAgent } from "@/lib/agents";
 import { memoryContext } from "@/lib/memory";
@@ -38,7 +33,6 @@ const ChatSection = () => {
   const [loading, setLoading] = useState(false);
   const [voiceOn, setVoiceOn] = useState(false);
   const [online, setOnline] = useState(navigator.onLine);
-  const [ollama, setOllama] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -46,12 +40,9 @@ const ChatSection = () => {
     const down = () => setOnline(false);
     window.addEventListener("online", up);
     window.addEventListener("offline", down);
-    ollamaAvailable().then(setOllama);
-    const t = setInterval(() => ollamaAvailable().then(setOllama), 15000);
     return () => {
       window.removeEventListener("online", up);
       window.removeEventListener("offline", down);
-      clearInterval(t);
     };
   }, []);
 
@@ -66,30 +57,7 @@ const ChatSection = () => {
     ]);
   };
 
-  const fallback = async (userText: string, aiId: string, history: Message[]) => {
-    // Try Ollama first if available, else offline rules
-    if (await ollamaAvailable()) {
-      try {
-        let full = "";
-        await ollamaChatStream(
-          [
-            ...history.map((m) => ({
-              role: m.sender === "user" ? ("user" as const) : ("assistant" as const),
-              content: m.content,
-            })),
-            { role: "user", content: userText },
-          ],
-          (delta) => {
-            full += delta;
-            setMessages((m) => m.map((x) => (x.id === aiId ? { ...x, content: full } : x)));
-          },
-        );
-        if (voiceOn && full) speak(full);
-        return;
-      } catch {
-        // fall through to rules
-      }
-    }
+  const fallback = async (userText: string, aiId: string) => {
     const r = offlineRespond(userText);
     setMessages((m) => m.map((x) => (x.id === aiId ? { ...x, content: r.text } : x)));
     if (voiceOn) speak(r.text);
@@ -101,7 +69,7 @@ const ChatSection = () => {
     setMessages((m) => [...m, { id: aiId, content: "", sender: "ai", timestamp: new Date() }]);
 
     if (!online) {
-      await fallback(userText, aiId, history);
+      await fallback(userText, aiId);
       setLoading(false);
       return;
     }
@@ -131,7 +99,7 @@ const ChatSection = () => {
         if (res.status === 429) toast.error("Rate limit — try again in a moment.");
         else if (res.status === 402) toast.error("AI credits depleted.");
         else toast.error(err.error || "AI request failed");
-        await fallback(userText, aiId, history);
+        await fallback(userText, aiId);
         return;
       }
 
@@ -162,7 +130,7 @@ const ChatSection = () => {
       }
       if (voiceOn && full) speak(full);
     } catch {
-      await fallback(userText, aiId, history);
+      await fallback(userText, aiId);
     } finally {
       setLoading(false);
     }
@@ -193,7 +161,7 @@ const ChatSection = () => {
     rec.start();
   };
 
-  const modeLabel = online ? "CLOUD" : ollama ? "OLLAMA" : "LOCAL";
+  const modeLabel = online ? "CLOUD" : "LOCAL";
 
   return (
     <div className="h-[78vh] min-h-[32rem] flex flex-col bg-slate-950 text-cyan-100">
@@ -203,11 +171,6 @@ const ChatSection = () => {
           EXILE
         </h2>
         <div className="flex items-center gap-2 text-xs">
-          {ollama && (
-            <span className="flex items-center gap-1 text-emerald-300">
-              <Cpu className="w-3 h-3" /> OLLAMA
-            </span>
-          )}
           <span className={`flex items-center gap-1 ${online ? "text-cyan-300" : "text-amber-400"}`}>
             {online ? <Wifi className="w-3 h-3" /> : <WifiOff className="w-3 h-3" />}
             {modeLabel}
@@ -270,8 +233,6 @@ const ChatSection = () => {
           placeholder={
             online
               ? "Speak freely, Sir…"
-              : ollama
-              ? "Offline · routing through local Ollama"
               : "Offline mode — local commands only"
           }
           className="flex-1 bg-slate-950 border-cyan-500/30 text-cyan-100 placeholder:text-cyan-500/50 focus-visible:ring-cyan-500/40"

@@ -16,7 +16,7 @@ It will:
   6. open your browser
 
 Paste your API keys inside the app: Settings -> API -> Connect & Run.
-No keys are needed to boot; the offline rules engine and Ollama still work.
+No keys are needed to boot; the offline rules engine still works.
 """
 from __future__ import annotations
 

@@ -1,7 +1,7 @@
 {
   "name": "EXILE — EXiled Intelligence, Liberated from Everything",
   "short_name": "EXILE",
-  "description": "Your AI. Your PC. Your rules. A sovereign cognitive OS that runs online, offline, or on local Ollama.",
+  "description": "Your AI. Your PC. Your rules. A sovereign cognitive OS that runs online or offline.",
   "start_url": "/",
   "scope": "/",
   "id": "/",

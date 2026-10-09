@@ -78,11 +78,11 @@ export default function ApiKeysSection() {
         (data.keys || []).map((k: any) => ({ name: k.name, value: '' })).concat([blank()]),
       );
       setStatus({
-        ok: (data.providers || []).length > 0 || !!data.ollama,
+        ok: (data.providers || []).length > 0,
         text:
           (data.providers || []).length > 0
             ? `Connected. Active providers: ${(data.providers || []).join(', ')}`
-            : 'Saved, but no cloud provider answered — EXILE will use Ollama / offline rules.',
+            : 'Saved, but no cloud provider answered — EXILE will use offline rules.',
       });
     } catch (e) {
       setStatus({ ok: false, text: (e as Error).message });
@@ -172,7 +172,7 @@ export default function ApiKeysSection() {
         <Input
           value={primary}
           onChange={(e) => setPrimary(e.target.value)}
-          placeholder="groq | openai | gemini | openrouter | ollama…"
+          placeholder="groq | openai | gemini | openrouter…"
           className="bg-slate-900/60 border-cyan-500/25 text-cyan-100 text-xs font-mono placeholder:text-cyan-500/30"
         />
       </div>
