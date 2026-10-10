@@ -1,0 +1,596 @@
+import { useEffect, useRef, useState } from 'react';
+import {
+  MessageCircle, Camera, Search, Mic, Files, Share2, Wifi, WifiOff, Activity,
+  MessageSquare, Phone, ShieldCheck, Home, Car, LayoutDashboard, Wand2, Film,
+  FileText, BookOpen, Settings, Send, X, AudioLines, Grid3x3, KeyRound,
+  History, Radio, Contact2, Menu,
+} from 'lucide-react';
+
+import { Button } from '@/components/ui/button';
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
+import ChatSection from '@/components/ChatSection';
+import CameraSection from '@/components/CameraSection';
+import FilesSection from '@/components/FilesSection';
+import ShareSection from '@/components/ShareSection';
+import VoiceSection from '@/components/VoiceSection';
+import ImageAnalysisSection from '@/components/ImageAnalysisSection';
+import WhatsAppSection from '@/components/WhatsAppSection';
+import CallsSection from '@/components/CallsSection';
+import DashboardSection from '@/components/DashboardSection';
+import SystemAccessSection from '@/components/SystemAccessSection';
+import HouseSection from '@/components/HouseSection';
+import CarControlSection from '@/components/CarControlSection';
+import MissionControl from '@/components/MissionControl';
+import VideoStoryboardSection from '@/components/VideoStoryboardSection';
+import DocumentSection from '@/components/DocumentSection';
+import ResearchSection from '@/components/ResearchSection';
+import VoiceStudio from '@/components/VoiceStudio';
+import AppsSection from '@/components/AppsSection';
+import ApiKeysSection from '@/components/ApiKeysSection';
+import ArcReactor, { ReactorDock } from '@/components/ArcReactor';
+import LockScreen from '@/components/LockScreen';
+import { streamChat } from '@/lib/ai';
+import { offlineRespond } from '@/lib/offlineExile';
+import { speakWithProfile } from '@/lib/voiceProfiles';
+import { micLevelMeter, speechLevelMeter, LevelMeter } from '@/lib/audioLevel';
+import { routeToAgent } from '@/lib/agents';
+import { memoryContext } from '@/lib/memory';
+import { logReasoning } from '@/lib/reasoningLog';
+import TranscriptSection from '@/components/TranscriptSection';
+import VoiceCommandsSection from '@/components/VoiceCommandsSection';
+import ContactsSection from '@/components/ContactsSection';
+import {
+  TranscriptTurn, listTurns, addTurn, updateTurn, addVoiceClip,
+} from '@/lib/conversation';
+import HealthSection from '@/components/HealthSection';
+import AuditSection from '@/components/AuditSection';
+import { runTool, type ToolContext } from '@/lib/tools';
+import { AiError, type ToolCall, type ModelTier } from '@/lib/ai';
+
+const menuItems = [
+  { id: 'api', icon: KeyRound, label: 'API' },
+  { id: 'transcript', icon: History, label: 'Chats' },
+  { id: 'contacts', icon: Contact2, label: 'Contacts' },
+  { id: 'voicecmd', icon: Radio, label: 'Voice Cmds' },
+  { id: 'health', icon: Activity, label: 'Health' },
+  { id: 'audit', icon: ShieldCheck, label: 'Audit' },
+
+  { id: 'mission', icon: LayoutDashboard, label: 'Mission' },
+  { id: 'chat', icon: MessageCircle, label: 'Console' },
+  { id: 'research', icon: BookOpen, label: 'Research' },
+
+  { id: 'cinema', icon: Film, label: 'Cinema' },
+  { id: 'docs', icon: FileText, label: 'Docs' },
+  { id: 'analysis', icon: Search, label: 'Vision' },
+  { id: 'voicestudio', icon: AudioLines, label: 'Voice Lab' },
+  { id: 'apps', icon: Grid3x3, label: 'Apps' },
+  { id: 'voice', icon: Mic, label: 'Voice' },
+  { id: 'dashboard', icon: Activity, label: 'Systems' },
+  { id: 'system', icon: ShieldCheck, label: 'Access' },
+  { id: 'house', icon: Home, label: 'House' },
+  { id: 'car', icon: Car, label: 'Vehicle' },
+  { id: 'whatsapp', icon: MessageSquare, label: 'WhatsApp' },
+  { id: 'calls', icon: Phone, label: 'Calls' },
+  { id: 'camera', icon: Camera, label: 'Optics' },
+  { id: 'files', icon: Files, label: 'Vault' },
+  { id: 'share', icon: Share2, label: 'Share' },
+];
+
+/** Panels that display large media → reactor docks bottom-right. */
+const MEDIA_PANELS = new Set(['cinema', 'camera', 'analysis', 'docs', 'files']);
+
+const navGroups = [
+  { id: 'Home', label: 'Home', icon: Home, items: [] },
+  { id: 'Messages', label: 'Messages', icon: MessageSquare, items: ['whatsapp', 'calls', 'contacts'] },
+  { id: 'AI Studio', label: 'AI Studio', icon: Wand2, items: ['chat', 'analysis', 'research', 'cinema', 'voicestudio', 'voice'] },
+  { id: 'My Tools', label: 'My Tools', icon: Files, items: ['transcript', 'docs', 'files', 'camera', 'share', 'apps'] },
+  { id: 'System', label: 'System', icon: Activity, items: ['mission', 'dashboard', 'system', 'house', 'car', 'health', 'audit', 'voicecmd'] },
+  { id: 'Settings', label: 'Settings', icon: Settings, items: ['api'] },
+];
+
+
+const Index = () => {
+  const [locked, setLocked] = useState(true);
+  const [panel, setPanel] = useState<string | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [menuCategory, setMenuCategory] = useState('Messages');
+  const [online, setOnline] = useState(typeof navigator !== 'undefined' ? navigator.onLine : true);
+  const [time, setTime] = useState(new Date());
+  const [input, setInput] = useState('');
+  const [reply, setReply] = useState('');
+  const [turns, setTurns] = useState<TranscriptTurn[]>([]);
+  const [state, setState] = useState<'idle' | 'listening' | 'thinking' | 'speaking'>('idle');
+  const [tier, setTier] = useState<ModelTier>(
+    () => ((typeof localStorage !== 'undefined' && localStorage.getItem('exile.tier')) as ModelTier) || 'fast',
+  );
+  const [pending, setPending] = useState<{ summary: string; resolve: (ok: boolean) => void } | null>(null);
+  const [level, setLevel] = useState(0);
+  const recRef = useRef<any>(null);
+  const meterRef = useRef<LevelMeter | null>(null);
+  const feedRef = useRef<HTMLDivElement | null>(null);
+  const mediaRef = useRef<MediaRecorder | null>(null);
+  const clipRef = useRef<BlobPart[]>([]);
+  const lastAudio = useRef<string | undefined>(undefined);
+
+  useEffect(() => {
+    const t = setInterval(() => setTime(new Date()), 1000);
+    const up = () => setOnline(true);
+    const down = () => setOnline(false);
+    const sync = () => setTurns(listTurns());
+    sync();
+    window.addEventListener('online', up);
+    window.addEventListener('offline', down);
+    window.addEventListener('exile:transcript', sync);
+    return () => {
+      clearInterval(t);
+      window.removeEventListener('online', up);
+      window.removeEventListener('offline', down);
+      window.removeEventListener('exile:transcript', sync);
+      meterRef.current?.stop();
+    };
+  }, []);
+
+  useEffect(() => {
+    feedRef.current?.scrollTo({ top: feedRef.current.scrollHeight, behavior: 'smooth' });
+  }, [turns, reply]);
+
+
+  const stopMeter = () => {
+    meterRef.current?.stop();
+    meterRef.current = null;
+    setLevel(0);
+  };
+
+  // Reactor docking: media panels → bottom-right, conversation → top-left, else center.
+  const dock: ReactorDock = panel && MEDIA_PANELS.has(panel)
+    ? 'bottom-right'
+    : panel || turns.length > 0
+      ? 'top-left'
+      : 'center';
+  const reactorSize = dock === 'center' ? 320 : dock === 'bottom-right' ? 132 : 108;
+
+  const dockStyle: Record<ReactorDock, React.CSSProperties> = {
+    center: { top: '50%', left: '50%', transform: 'translate(-50%, -58%)' },
+    'top-left': { top: 16, left: 16, transform: 'none' },
+    'bottom-right': { top: 'calc(100% - 172px)', left: 'calc(100% - 172px)', transform: 'none' },
+  };
+
+  const renderPanel = (id: string) => {
+    switch (id) {
+      case 'api': return <ApiKeysSection />;
+      case 'transcript': return <TranscriptSection />;
+      case 'contacts': return <ContactsSection />;
+
+      case 'voicecmd': return <VoiceCommandsSection />;
+      case 'health': return <HealthSection />;
+      case 'audit': return <AuditSection />;
+      case 'mission': return <MissionControl onOpenSection={setPanel} />;
+      case 'chat': return <ChatSection />;
+      case 'research': return <ResearchSection />;
+      case 'cinema': return <VideoStoryboardSection />;
+      case 'docs': return <DocumentSection />;
+      case 'dashboard': return <DashboardSection />;
+      case 'system': return <SystemAccessSection />;
+      case 'house': return <HouseSection />;
+      case 'car': return <CarControlSection />;
+      case 'whatsapp': return <WhatsAppSection />;
+      case 'calls': return <CallsSection />;
+      case 'camera': return <CameraSection />;
+      case 'analysis': return <ImageAnalysisSection />;
+      case 'voice': return <VoiceSection />;
+      case 'voicestudio': return <VoiceStudio />;
+      case 'apps': return <AppsSection />;
+      case 'files': return <FilesSection />;
+      case 'share': return <ShareSection />;
+      default: return null;
+    }
+  };
+
+  const say = (text: string) => {
+    stopMeter();
+    setState('speaking');
+    meterRef.current = speechLevelMeter(setLevel);
+    speakWithProfile(text, () => {
+      stopMeter();
+      setState('idle');
+    });
+  };
+
+  const ask = async (text: string, audio?: string) => {
+    if (!text.trim()) return;
+    setInput('');
+    setReply('');
+    stopMeter();
+    setState('thinking');
+
+    addTurn('user', text.trim());
+    if (audio !== undefined) {
+      addVoiceClip({ id: crypto.randomUUID(), audio, transcript: text.trim(), at: Date.now() });
+    }
+    const exileTurn = addTurn('exile', '…');
+
+    const agent = routeToAgent(text);
+    logReasoning(agent.name, 'Received directive', text);
+
+    const finish = (t: string) => {
+      updateTurn(exileTurn.id, t);
+      setReply(t);
+      say(t);
+    };
+
+    if (!online) return finish(offlineRespond(text).text);
+
+    const convo: Record<string, unknown>[] = [
+      ...(memoryContext() ? [{ role: 'system', content: memoryContext() }] : []),
+      { role: 'system', content: `Active agent: ${agent.name}. ${agent.systemPrompt}` },
+      ...listTurns()
+        .slice(-20)
+        .filter((t) => t.text && t.text !== '…' && t.id !== exileTurn.id)
+        .map((t) => ({ role: t.role === 'user' ? 'user' : 'assistant', content: t.text })),
+    ];
+
+    const toolCtx: ToolContext = {
+      openSection: (id) => setPanel(id),
+      approve: (summary) => new Promise<boolean>((resolve) => setPending({ summary, resolve })),
+      generateImage: (prompt) => {
+        setPanel('chat');
+        window.setTimeout(() => {
+          window.dispatchEvent(new CustomEvent('exile:generate-image', {
+            detail: { prompt },
+          }));
+        }, 350);
+      },
+    };
+
+    try {
+      let full = '';
+      for (let hop = 0; hop < 4; hop++) {
+        let calls: ToolCall[] = [];
+        let chunk = '';
+        await streamChat(
+          'exile-chat',
+          { messages: convo, tier },
+          (d) => {
+            chunk += d;
+            setReply(full + chunk);
+            updateTurn(exileTurn.id, full + chunk);
+          },
+          { onToolCalls: (c) => { calls = c; } },
+        );
+        full += chunk;
+        if (!calls.length) break;
+
+        convo.push({
+          role: 'assistant',
+          content: chunk || null,
+          tool_calls: calls.map((c) => ({
+            id: c.id,
+            type: 'function',
+            function: { name: c.name, arguments: JSON.stringify(c.args ?? {}) },
+          })),
+        });
+
+        for (const call of calls) {
+          logReasoning(agent.name, `Tool ${call.name}`, JSON.stringify(call.args ?? {}).slice(0, 120));
+          const result = await runTool(call, toolCtx);
+          convo.push({ role: 'tool', tool_call_id: result.id, content: result.output });
+        }
+      }
+
+      logReasoning(agent.name, 'Response delivered', full.slice(0, 120));
+      if (full.trim()) finish(full);
+      else {
+        updateTurn(exileTurn.id, '(no response)');
+        setState('idle');
+      }
+    } catch (err) {
+      const reason = err instanceof AiError || err instanceof Error ? err.message : 'unknown fault';
+      logReasoning(agent.name, 'Cloud link failed — local reasoning engaged', reason);
+      finish(`${offlineRespond(text).text}\n\n— cloud link unavailable (${reason}); answered locally.`);
+    }
+  };
+
+  const listen = async () => {
+    const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SR) return;
+    const rec = new SR();
+    rec.lang = 'en-GB';
+    rec.interimResults = false;
+
+    // record the spoken command so it can be replayed / deleted later
+    lastAudio.current = undefined;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mr = new MediaRecorder(stream);
+      clipRef.current = [];
+      mr.ondataavailable = (e) => clipRef.current.push(e.data);
+      mr.onstop = () => {
+        stream.getTracks().forEach((t) => t.stop());
+        const blob = new Blob(clipRef.current, { type: mr.mimeType || 'audio/webm' });
+        const reader = new FileReader();
+        reader.onloadend = () => { lastAudio.current = reader.result as string; };
+        reader.readAsDataURL(blob);
+      };
+      mr.start();
+      mediaRef.current = mr;
+    } catch {
+      /* recording is optional */
+    }
+
+    const stopClip = () => {
+      if (mediaRef.current && mediaRef.current.state !== 'inactive') mediaRef.current.stop();
+      mediaRef.current = null;
+    };
+
+    rec.onresult = (e: any) => {
+      stopMeter();
+      const transcript = e.results[0][0].transcript;
+      stopClip();
+      // give the FileReader a moment to finish encoding the clip
+      setTimeout(() => ask(transcript, lastAudio.current), 300);
+    };
+    rec.onend = () => {
+      if (meterRef.current) stopMeter();
+      stopClip();
+      setState((s) => (s === 'listening' ? 'idle' : s));
+    };
+    recRef.current = rec;
+    setState('listening');
+    try {
+      meterRef.current = await micLevelMeter(setLevel);
+    } catch {
+      /* level spikes are optional */
+    }
+    rec.start();
+  };
+
+
+  if (locked) return <LockScreen onUnlock={() => setLocked(false)} />;
+
+  // WhatsApp is a full-window workspace, not a small modal overlay.
+  if (panel === 'whatsapp') {
+    return (
+      <div className="fixed inset-0 z-[55] flex flex-col bg-slate-950 text-cyan-100">
+        <header className="h-12 shrink-0 flex items-center justify-between border-b border-cyan-500/20 bg-slate-950 px-4">
+          <button
+            onClick={() => setPanel(null)}
+            className="flex items-center gap-2 rounded-md px-3 py-2 text-sm text-cyan-200 hover:bg-cyan-500/10"
+            aria-label="Return to Exile AI"
+          >
+            <X className="h-4 w-4" />
+            Back to Exile
+          </button>
+          <span className="text-xs tracking-[0.2em] text-cyan-400/70">MESSAGES</span>
+        </header>
+        <main className="min-h-0 flex-1 overflow-hidden">
+          {renderPanel('whatsapp')}
+        </main>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-slate-950 text-cyan-100 relative overflow-hidden flex flex-col">
+      <div
+        className="pointer-events-none absolute inset-0 opacity-40"
+        style={{
+          backgroundImage:
+            'radial-gradient(circle at 50% 45%, rgba(56,189,248,0.14), transparent 55%), linear-gradient(rgba(34,211,238,0.05) 1px, transparent 1px), linear-gradient(90deg, rgba(34,211,238,0.05) 1px, transparent 1px)',
+          backgroundSize: 'auto, 44px 44px, 44px 44px',
+        }}
+      />
+
+      {/* top bar */}
+      <header className="relative z-10 flex items-center justify-between px-5 pt-5">
+        <div className="text-[10px] tracking-[0.4em] text-cyan-400/70 space-y-1">
+          <div className="flex items-center gap-1.5">
+            {online ? <Wifi className="w-3 h-3" /> : <WifiOff className="w-3 h-3 text-amber-400" />}
+            <span>{online ? 'DATA LINK ACTIVE' : 'LOCAL MODE'}</span>
+          </div>
+          <div className="font-mono text-cyan-400/50">{time.toLocaleTimeString()}</div>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => {
+              const next: ModelTier = tier === 'fast' ? 'deep' : 'fast';
+              setTier(next);
+              try { localStorage.setItem('exile.tier', next); } catch { /* storage blocked */ }
+            }}
+            aria-label="Reasoning tier"
+            className="h-11 px-3 rounded-full border border-cyan-500/40 bg-slate-900/50 text-[9px] tracking-[0.3em] text-cyan-300 hover:bg-cyan-500/15 transition"
+          >
+            {tier === 'fast' ? 'FAST' : 'DEEP'}
+          </button>
+          <button
+            onClick={() => setSettingsOpen(true)}
+            aria-label="Open navigation menu"
+            title="Menu"
+            className="w-11 h-11 rounded-xl border border-cyan-500/40 bg-slate-900/70 flex items-center justify-center text-cyan-300 hover:bg-cyan-500/15 transition"
+          >
+            <Menu className="w-5 h-5" />
+          </button>
+        </div>
+      </header>
+
+      {/* docking arc reactor */}
+      <button
+        onClick={listen}
+        aria-label="Speak to EXILE"
+        className="fixed z-50 transition-all duration-700 ease-in-out"
+        style={dockStyle[dock]}
+      >
+        <ArcReactor size={reactorSize} state={state} amplitude={level} />
+      </button>
+
+      {/* core — persistent conversation feed */}
+      <main className="relative flex-1 flex flex-col items-center justify-end gap-4 px-6 pb-4">
+        <div
+          ref={feedRef}
+          className="w-full max-w-3xl max-h-[58vh] min-h-[7rem] overflow-y-auto px-2 space-y-5"
+        >
+          {turns.length === 0 ? (
+            <p className="text-center text-[10px] tracking-[0.4em] text-cyan-400/50">
+              {state === 'listening' ? 'LISTENING…' : state === 'thinking' ? 'PROCESSING…' : 'EXILE STANDING BY'}
+            </p>
+          ) : (
+            turns.map((t) => (
+              <div key={t.id} className={t.role === 'user' ? 'ml-auto max-w-[88%] text-right' : 'mr-auto max-w-[95%]'}>
+                <div className="text-[9px] tracking-[0.3em] text-cyan-400/50 mb-1">
+                  {t.role === 'user' ? 'YOU' : 'EXILE'}
+                </div>
+                <p
+                  className={`text-base sm:text-lg leading-8 whitespace-pre-wrap ${
+                    t.role === 'user' ? 'text-cyan-300/85' : 'text-cyan-100/90'
+                  }`}
+                >
+                  {t.text}
+                </p>
+              </div>
+            ))
+          )}
+
+          {turns.length > 0 && state !== 'idle' && (
+            <p className="text-center text-[10px] tracking-[0.4em] text-cyan-400/50">
+              {state === 'listening' ? 'LISTENING…' : state === 'thinking' ? 'PROCESSING…' : 'SPEAKING…'}
+            </p>
+          )}
+        </div>
+      </main>
+
+
+
+      {/* type bar */}
+      <footer className="relative px-5 pb-7">
+        <form
+          onSubmit={(e) => { e.preventDefault(); ask(input); }}
+          className="mx-auto max-w-xl flex items-center gap-2 rounded-full border border-cyan-500/35 bg-slate-900/70 backdrop-blur px-4 py-2 shadow-[0_0_30px_rgba(34,211,238,0.15)]"
+        >
+          <button type="button" onClick={listen} className="text-cyan-300/80 hover:text-cyan-100" aria-label="Voice input">
+            <Mic className="w-4 h-4" />
+          </button>
+          <input
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            placeholder="Speak or type a directive…"
+            className="flex-1 bg-transparent outline-none text-sm placeholder:text-cyan-500/40 text-cyan-50"
+          />
+          <Button type="submit" size="icon" variant="ghost" className="h-8 w-8 rounded-full text-cyan-300 hover:bg-cyan-500/15">
+            <Send className="w-4 h-4" />
+          </Button>
+        </form>
+        <p className="text-center text-[9px] tracking-[0.35em] text-cyan-500/40 mt-3">
+          EXILE // YOUR AI · YOUR PC · YOUR RULES
+        </p>
+      </footer>
+
+      {/* settings */}
+      <Sheet open={settingsOpen} onOpenChange={setSettingsOpen}>
+        <SheetContent side="right" className="w-full sm:max-w-sm bg-slate-950 border-cyan-500/30 text-cyan-100 overflow-y-auto">
+          <SheetHeader>
+            <SheetTitle className="text-cyan-100 tracking-[0.3em] text-sm">EXILE MENU</SheetTitle>
+          </SheetHeader>
+          <div className="mt-5 space-y-2">
+            <button
+              onClick={() => { setPanel(null); setSettingsOpen(false); }}
+              className="flex w-full items-center gap-3 rounded-lg border border-cyan-500/20 bg-slate-900/60 px-3 py-3 text-left text-sm text-cyan-100 hover:bg-cyan-500/10"
+            >
+              <Home className="h-5 w-5 text-cyan-300" />
+              <span className="flex-1">Home</span>
+            </button>
+
+            {navGroups.filter((group) => group.id !== 'Home').map((group) => {
+              const GroupIcon = group.icon;
+              const selected = menuCategory === group.id;
+              const tools = menuItems.filter((item) => group.items.includes(item.id));
+              return (
+                <div key={group.id} className="overflow-hidden rounded-lg border border-cyan-500/20">
+                  <button
+                    onClick={() => setMenuCategory(selected ? '' : group.id)}
+                    aria-expanded={selected}
+                    className={`flex w-full items-center gap-3 px-3 py-3 text-left text-sm transition ${
+                      selected ? 'bg-cyan-500/10 text-cyan-100' : 'bg-slate-900/60 text-cyan-200 hover:bg-cyan-500/10'
+                    }`}
+                  >
+                    <GroupIcon className="h-5 w-5 text-cyan-300" />
+                    <span className="flex-1">{group.label}</span>
+                    <span className="text-xs text-cyan-500/70">{tools.length}</span>
+                    <span className="text-cyan-400/70">{selected ? '−' : '+'}</span>
+                  </button>
+                  {selected && (
+                    <div className="space-y-1 border-t border-cyan-500/15 bg-slate-950/70 p-2">
+                      {tools.map((item) => {
+                        const ItemIcon = item.icon;
+                        return (
+                          <button
+                            key={item.id}
+                            onClick={() => { setPanel(item.id); setSettingsOpen(false); }}
+                            className="flex w-full items-center gap-3 rounded-md px-3 py-2.5 text-left text-sm text-cyan-100/85 transition hover:bg-cyan-500/10 hover:text-cyan-50"
+                          >
+                            <ItemIcon className="h-4 w-4 text-cyan-400/80" />
+                            <span className="flex-1">{item.label}</span>
+                            <span className="text-cyan-500/50">›</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+          <button
+            onClick={() => { setSettingsOpen(false); setLocked(true); }}
+            className="mt-6 w-full rounded-md border border-cyan-500/30 py-2 text-[10px] tracking-[0.3em] text-cyan-300/80 hover:bg-cyan-500/10"
+          >
+            LOCK EXILE
+          </button>
+        </SheetContent>
+      </Sheet>
+
+      {/* section overlay */}
+      {panel && (
+        <div className="fixed inset-0 z-40 bg-slate-950/95 backdrop-blur-sm overflow-y-auto">
+          <div className="max-w-5xl mx-auto p-4">
+            <div className="flex items-center justify-between mb-3">
+              <span className="text-[10px] tracking-[0.35em] text-cyan-400/70 uppercase">
+                {menuItems.find((m) => m.id === panel)?.label}
+              </span>
+              <button onClick={() => setPanel(null)} aria-label="Close" className="text-cyan-300 hover:text-cyan-100">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="rounded-lg border border-cyan-500/30 bg-slate-900/60 overflow-hidden">
+              {renderPanel(panel)}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* sensitive action approval */}
+      {pending && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/80 backdrop-blur-sm p-6">
+          <div className="w-full max-w-sm rounded-lg border border-cyan-500/40 bg-slate-900/95 p-5 shadow-[0_0_40px_rgba(34,211,238,0.25)]">
+            <p className="text-[10px] tracking-[0.35em] text-cyan-400/70 mb-2">AUTHORISATION REQUIRED</p>
+            <p className="text-sm text-cyan-100/90 leading-6">{pending.summary}</p>
+            <div className="mt-5 flex gap-2">
+              <button
+                onClick={() => { pending.resolve(false); setPending(null); }}
+                className="flex-1 rounded-md border border-cyan-500/30 py-2 text-[10px] tracking-[0.3em] text-cyan-300/80 hover:bg-cyan-500/10"
+              >
+                REFUSE
+              </button>
+              <button
+                onClick={() => { pending.resolve(true); setPending(null); }}
+                className="flex-1 rounded-md border border-cyan-400/60 bg-cyan-500/15 py-2 text-[10px] tracking-[0.3em] text-cyan-100 hover:bg-cyan-500/25"
+              >
+                APPROVE
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default Index;
