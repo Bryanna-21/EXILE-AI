@@ -1,5 +1,6 @@
 // Offline rule-based Exile brain — works without internet.
 // Handles common commands locally so the assistant is always responsive.
+import { speakWithProfile } from "@/lib/voiceProfiles";
 
 export interface OfflineResponse {
   text: string;
@@ -15,7 +16,7 @@ const greetings = [
 
 const pick = <T,>(arr: T[]) => arr[Math.floor(Math.random() * arr.length)];
 
-export function offlineRespond(input: string): OfflineResponse {
+function offlineRespondBase(input: string): OfflineResponse {
   const q = input.toLowerCase().trim();
 
   if (!q) return { text: "I'm listening, Sir." };
@@ -77,19 +78,104 @@ export function offlineRespond(input: string): OfflineResponse {
   };
 }
 
+
+/**
+ * Keep EXILE's personality present when cloud reasoning is unavailable.
+ * Preserve action payloads so navigation and device commands remain intact.
+ */
+export function offlineRespond(input: string): OfflineResponse {
+  const result = offlineRespondBase(input);
+  const q = input.toLowerCase().trim();
+  const venom = (() => {
+    try {
+      return localStorage.getItem("exile.venom-mode") === "true";
+    } catch {
+      return false;
+    }
+  })();
+
+  const playful = (standard: string, intense: string) =>
+    venom ? intense : standard;
+
+  if (/\b(are you there|you there|anyone there)\b/.test(q)) {
+    return {
+      ...result,
+      text: playful(
+        "Right here. Quietly keeping the lights on. What do you need?",
+        "Right here. Watching the wires. Try not to break reality before I finish booting.",
+      ),
+    };
+  }
+
+  if (/\b(thank|thanks|thank you)\b/.test(q)) {
+    return {
+      ...result,
+      text: playful(
+        "Anytime. I do enjoy being right and useful.",
+        "You're welcome. Try not to look so surprised that I saved the day.",
+      ),
+    };
+  }
+
+  if (/\b(joke|make me laugh|funny)\b/.test(q)) {
+    return {
+      ...result,
+      text: playful(
+        "I tried to tell a joke about a computer bug, but it kept returning to the same issue. Much like some projects I know.",
+        "Your code called for backup. I asked why. It said, 'Because the developer is about to call this a small change.'",
+      ),
+    };
+  }
+
+  if (/\b(bye|goodbye|see you|good night)\b/.test(q)) {
+    return {
+      ...result,
+      text: playful(
+        "Standing by. Go do something brilliant—or at least back up your files.",
+        "Go on, then. I'll be here, judging your folder structure in silence.",
+      ),
+    };
+  }
+
+  if (/\b(what can you do|help|capabilit)\b/.test(q)) {
+    return {
+      ...result,
+      text: playful(
+        "Offline, I can handle a few local tasks, tell the time, calculate, and help navigate the app. For deeper reasoning, I need the configured AI service. I won't pretend otherwise.",
+        "Offline I've still got a few tricks: calculations, time, and local app controls. For the heavy intellectual lifting, reconnect the reasoning core. Even I can't argue with a disconnected network.",
+      ),
+    };
+  }
+
+  if (
+    /i (broke|broken| messed up|ruined) (the )?(code|project|app)/.test(q) ||
+    /\b(it failed|something went wrong|i made a mistake)\b/.test(q)
+  ) {
+    return {
+      ...result,
+      text: playful(
+        "No panic. Show me what happened and we'll work through it one step at a time.",
+        "Excellent. Another mystery for the investigation board. Show me the error before we accuse the keyboard.",
+      ),
+    };
+  }
+
+  if (
+    /i('?m| am) (sad|upset|stressed|tired|frustrated|worried)\b/.test(q)
+  ) {
+    return {
+      ...result,
+      text: "I'm here with you. You don't have to turn everything into a problem to solve immediately. Tell me what's going on, and we'll take it one step at a time.",
+    };
+  }
+
+  return result;
+}
+
 export function speak(text: string) {
-  if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
   try {
-    const u = new SpeechSynthesisUtterance(text);
-    u.rate = 1.0;
-    u.pitch = 0.9;
-    const voices = window.speechSynthesis.getVoices();
-    const british =
-      voices.find((v) => /en-GB/i.test(v.lang) && /male/i.test(v.name)) ||
-      voices.find((v) => /en-GB/i.test(v.lang)) ||
-      voices.find((v) => /Daniel|Google UK English Male/i.test(v.name));
-    if (british) u.voice = british;
-    window.speechSynthesis.cancel();
-    window.speechSynthesis.speak(u);
-  } catch {}
+    speakWithProfile(text);
+  } catch {
+    // Speech is optional; offline responses must still work without it.
+  }
 }

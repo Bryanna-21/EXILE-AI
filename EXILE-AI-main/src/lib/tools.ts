@@ -16,8 +16,8 @@ export interface ToolContext {
   openSection: (id: string) => void;
   /** Ask the operator to approve a sensitive action. Resolves false on refusal. */
   approve: (summary: string) => Promise<boolean>;
-  /** Render an image on the HUD. */
-  renderImage?: (prompt: string) => void;
+  /** Generate an image directly inside the chat conversation. */
+  generateImage?: (prompt: string) => void;
 }
 
 export const SENSITIVE_TOOLS = new Set(["send_whatsapp", "place_call", "house_command"]);
@@ -151,8 +151,12 @@ export async function runTool(call: ToolCall, ctx: ToolContext): Promise<ToolRes
         output = await houseCommand(String(args.entity), String(args.action));
         break;
       case "generate_image":
-        ctx.renderImage?.(String(args.prompt));
-        output = "Render started; the frame will appear on the HUD.";
+        if (!String(args.prompt ?? "").trim()) {
+          output = "An image prompt is required.";
+        } else {
+          ctx.generateImage?.(String(args.prompt));
+          output = "Image generation started in the EXILE Console.";
+        }
         break;
       default:
         output = `Unknown tool: ${call.name}.`;

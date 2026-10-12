@@ -4,6 +4,10 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
 import {
+  isVenomModeEnabled,
+  setVenomModeEnabled,
+} from "@/lib/venomMode";
+import {
   VoiceProfile,
   listVoiceProfiles,
   saveVoiceProfile,
@@ -23,6 +27,7 @@ const VoiceStudio = () => {
   const [rate, setRate] = useState(1);
   const [voiceURI, setVoiceURI] = useState<string>("");
   const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
+  const [venomMode, setVenomMode] = useState(isVenomModeEnabled);
   const recRef = useRef<MediaRecorder | null>(null);
   const chunks = useRef<BlobPart[]>([]);
 
@@ -89,6 +94,39 @@ const VoiceStudio = () => {
         <p className="text-xs text-cyan-400/60 mt-1">
           Record a sample, tune the clone, and set EXILE's active speaking voice.
         </p>
+      </div>
+
+      <div className="rounded-md border border-red-500/30 bg-black/70 p-4 flex items-center justify-between gap-4">
+        <div>
+          <div className="text-sm font-bold tracking-widest text-red-200">
+            VENOM MODE
+          </div>
+          <p className="mt-1 text-xs text-slate-400">
+            Darker speech settings and a symbiote-inspired personality.
+          </p>
+          <p className="mt-1 text-[10px] text-slate-500">
+            Voice depth depends on the speech voices installed on this PC.
+          </p>
+        </div>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={venomMode}
+          aria-label="Toggle Venom Mode"
+          onClick={() => {
+            const next = !venomMode;
+            setVenomMode(next);
+            setVenomModeEnabled(next);
+            toast.success(next ? "Venom Mode enabled." : "Venom Mode disabled.");
+          }}
+          className={`shrink-0 rounded-full border px-4 py-2 text-xs font-bold tracking-wider transition-colors ${
+            venomMode
+              ? "border-red-400 bg-red-950 text-red-200"
+              : "border-cyan-500/30 bg-slate-950 text-cyan-200"
+          }`}
+        >
+          {venomMode ? "ON" : "OFF"}
+        </button>
       </div>
 
       <div className="rounded-md border border-cyan-500/25 bg-slate-900/60 p-4 space-y-4">

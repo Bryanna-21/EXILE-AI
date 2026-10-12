@@ -19,7 +19,7 @@ export function setLocalApi(url: string) {
   }
 }
 
-const CANDIDATES = [8787, 8788, 8789].map((p) => `http://localhost:${p}`);
+const CANDIDATES = [8787, 8788, 8789].map((p) => `http://127.0.0.1:${p}`);
 
 let detection: Promise<string> | null = null;
 
@@ -149,6 +149,18 @@ export async function streamChat(
 ): Promise<string> {
   const attempts = Math.max(1, opts.attempts ?? 3);
   const timeoutMs = opts.timeoutMs ?? 90_000;
+
+  // Discover the local API before selecting the chat endpoint in desktop/local builds.
+  const isLocalApp =
+    typeof window !== "undefined" &&
+    (window.location.protocol === "file:" ||
+      window.location.hostname === "localhost" ||
+      window.location.hostname === "127.0.0.1");
+
+  if (!LOCAL_API && isLocalApp) {
+    await detectLocalApi(true);
+  }
+
   let lastError: AiError | null = null;
 
   for (let attempt = 1; attempt <= attempts; attempt++) {
@@ -245,10 +257,42 @@ export async function streamImage(
   onFrame: (dataUrl: string, isFinal: boolean) => void,
   model?: string,
 ): Promise<void> {
+  // Desktop and localhost image generation must use the local model API.
+  const isLocalApp =
+    typeof window !== "undefined" &&
+    (window.location.protocol === "file:" ||
+      window.location.hostname === "localhost" ||
+      window.location.hostname === "127.0.0.1");
+
+  let imageEndpoint: string;
+  let imageHeaders: Record<string, string>;
+
+  if (isLocalApp) {
+    const localApi = await detectLocalApi(true);
+
+    if (!localApi) {
+      throw new AiError(
+        "network",
+        "Local image server is unavailable. Start the Exile AI desktop app and make sure its local API is running on port 8787.",
+      );
+    }
+
+    imageEndpoint = `${localApi}/exile-image`;
+    imageHeaders = { "Content-Type": "application/json" };
+  } else {
+    // Hosted web builds retain their existing configured image endpoint.
+    imageEndpoint = endpoint("exile-image");
+    imageHeaders = authHeaders();
+  }
+
   const res = await timedFetch(
-    endpoint("exile-image"),
-    { method: "POST", headers: authHeaders(), body: JSON.stringify({ prompt, model }) },
-    180_000,
+    imageEndpoint,
+    {
+      method: "POST",
+      headers: imageHeaders,
+      body: JSON.stringify({ prompt, model }),
+    },
+    390_000,
   );
 
   if (!res.ok || !res.body) {

@@ -1,14 +1,16 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
+import * as pdfjsLib from 'pdfjs-dist';
 import {
   MessageCircle, Camera, Search, Mic, Files, Share2, Wifi, WifiOff, Activity,
   MessageSquare, Phone, ShieldCheck, Home, Car, LayoutDashboard, Wand2, Film,
   FileText, BookOpen, Settings, Send, X, AudioLines, Grid3x3, KeyRound,
-  History, Radio, Contact2,
+  History, FilePlus2, Radio, Contact2, Menu, Volume2, VolumeX,
+  Paperclip, FileText as AttachmentFileIcon,
 } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
+import CodeCanvas from '@/components/CodeCanvas';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
-import ChatSection from '@/components/ChatSection';
 import CameraSection from '@/components/CameraSection';
 import FilesSection from '@/components/FilesSection';
 import ShareSection from '@/components/ShareSection';
@@ -21,7 +23,6 @@ import SystemAccessSection from '@/components/SystemAccessSection';
 import HouseSection from '@/components/HouseSection';
 import CarControlSection from '@/components/CarControlSection';
 import MissionControl from '@/components/MissionControl';
-import ImageGenSection from '@/components/ImageGenSection';
 import VideoStoryboardSection from '@/components/VideoStoryboardSection';
 import DocumentSection from '@/components/DocumentSection';
 import ResearchSection from '@/components/ResearchSection';
@@ -30,23 +31,25 @@ import AppsSection from '@/components/AppsSection';
 import ApiKeysSection from '@/components/ApiKeysSection';
 import ArcReactor, { ReactorDock } from '@/components/ArcReactor';
 import LockScreen from '@/components/LockScreen';
-import { streamChat } from '@/lib/ai';
+import { streamChat, streamImage, fileToDataUrl } from '@/lib/ai';
 import { offlineRespond } from '@/lib/offlineExile';
 import { speakWithProfile } from '@/lib/voiceProfiles';
 import { micLevelMeter, speechLevelMeter, LevelMeter } from '@/lib/audioLevel';
 import { routeToAgent } from '@/lib/agents';
 import { memoryContext } from '@/lib/memory';
 import { logReasoning } from '@/lib/reasoningLog';
-import TranscriptSection from '@/components/TranscriptSection';
+import ChatSection from '@/components/ChatSection';
 import VoiceCommandsSection from '@/components/VoiceCommandsSection';
 import ContactsSection from '@/components/ContactsSection';
 import {
-  TranscriptTurn, listTurns, addTurn, updateTurn, addVoiceClip,
+  TranscriptTurn, listTurns, addTurn, updateTurn, addVoiceClip, startNewSession,
 } from '@/lib/conversation';
 import HealthSection from '@/components/HealthSection';
 import AuditSection from '@/components/AuditSection';
 import { runTool, type ToolContext } from '@/lib/tools';
 import { AiError, type ToolCall, type ModelTier } from '@/lib/ai';
+import { rememberGeneratedImage } from '@/lib/generatedImage';
+import ActivityCenter from '@/components/ActivityCenter';
 
 const menuItems = [
   { id: 'api', icon: KeyRound, label: 'API' },
@@ -57,10 +60,8 @@ const menuItems = [
   { id: 'audit', icon: ShieldCheck, label: 'Audit' },
 
   { id: 'mission', icon: LayoutDashboard, label: 'Mission' },
-  { id: 'chat', icon: MessageCircle, label: 'Console' },
   { id: 'research', icon: BookOpen, label: 'Research' },
 
-  { id: 'generate', icon: Wand2, label: 'Render' },
   { id: 'cinema', icon: Film, label: 'Cinema' },
   { id: 'docs', icon: FileText, label: 'Docs' },
   { id: 'analysis', icon: Search, label: 'Vision' },
@@ -78,18 +79,103 @@ const menuItems = [
   { id: 'share', icon: Share2, label: 'Share' },
 ];
 
-/** Panels that display large media → reactor docks bottom-right. */
-const MEDIA_PANELS = new Set(['generate', 'cinema', 'camera', 'analysis', 'docs', 'files']);
+pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
+  'pdfjs-dist/build/pdf.worker.min.mjs',
+  import.meta.url,
+).toString();
 
+type ConsoleAttachment = {
+  id: string;
+  file: File;
+  kind: 'image' | 'pdf' | 'text';
+  dataUrl?: string;
+  extractedText?: string;
+};
+
+const MAX_ATTACHMENTS = 5;
+const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
+const MAX_TOTAL_ATTACHMENT_BYTES = 15 * 1024 * 1024;
+const MAX_PDF_PAGES = 50;
+const MAX_ATTACHMENT_TEXT = 40000;
+const MAX_COMBINED_PROMPT = 90000;
+const TEXT_FILE_EXTENSIONS = /\.(txt|md|markdown|csv|json|log|xml|yaml|yml|toml|js|jsx|ts|tsx|py|html|css|sql|java|c|h|cpp|hpp|rs|go|sh)$/i;
+
+/** Panels that display large media → reactor docks bottom-right. */
+const MEDIA_PANELS = new Set(['cinema', 'camera', 'analysis', 'docs', 'files']);
+
+const navGroups = [
+  { id: 'Home', label: 'Home', icon: Home, items: [] },
+  { id: 'Messages', label: 'Messages', icon: MessageSquare, items: ['whatsapp', 'calls', 'contacts'] },
+  { id: 'AI Studio', label: 'AI Studio', icon: Wand2, items: ['analysis', 'research', 'cinema', 'voicestudio', 'voice'] },
+  { id: 'My Tools', label: 'My Tools', icon: Files, items: ['transcript', 'docs', 'files', 'camera', 'share', 'apps'] },
+  { id: 'System', label: 'System', icon: Activity, items: ['mission', 'dashboard', 'system', 'house', 'car', 'health', 'audit', 'voicecmd'] },
+  { id: 'Settings', label: 'Settings', icon: Settings, items: ['api'] },
+];
+
+
+function renderExileMessage(text: string): ReactNode[] {
+  const pattern = /```([a-zA-Z0-9_+#.-]*)[ \t]*\r?\n([\s\S]*?)```/g;
+  const nodes: ReactNode[] = [];
+  let cursor = 0;
+  let index = 0;
+
+  for (const match of text.matchAll(pattern)) {
+    const start = match.index ?? 0;
+
+    if (start > cursor) {
+      nodes.push(
+        <span key={`text-${index++}`} className="whitespace-pre-wrap">
+          {text.slice(cursor, start)}
+        </span>,
+      );
+    }
+
+    const code = match[2].replace(/\r?\n$/, "");
+    if (code.trim()) {
+      nodes.push(
+        <div key={`code-${index++}`} className="my-3 text-left">
+          <CodeCanvas code={code} language={match[1] || undefined} />
+        </div>,
+      );
+    }
+
+    cursor = start + match[0].length;
+  }
+
+  if (cursor < text.length) {
+    nodes.push(
+      <span key={`text-${index++}`} className="whitespace-pre-wrap">
+        {text.slice(cursor)}
+      </span>,
+    );
+  }
+
+  return nodes;
+}
 
 const Index = () => {
   const [locked, setLocked] = useState(true);
   const [panel, setPanel] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [menuCategory, setMenuCategory] = useState('Messages');
   const [online, setOnline] = useState(typeof navigator !== 'undefined' ? navigator.onLine : true);
   const [time, setTime] = useState(new Date());
   const [input, setInput] = useState('');
   const [reply, setReply] = useState('');
+  const [attachments, setAttachments] = useState<ConsoleAttachment[]>([]);
+  const [attachmentError, setAttachmentError] = useState('');
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [muted, setMuted] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('exile.console.muted') === 'true';
+    } catch {
+      return false;
+    }
+  });
+  const [generatedImage, setGeneratedImage] = useState<{ dataUrl: string; prompt: string } | null>(null);
+  const [imageGenerating, setImageGenerating] = useState(false);
+  const [imageError, setImageError] = useState('');
+  const [imageFullscreen, setImageFullscreen] = useState(false);
   const [turns, setTurns] = useState<TranscriptTurn[]>([]);
   const [state, setState] = useState<'idle' | 'listening' | 'thinking' | 'speaking'>('idle');
   const [tier, setTier] = useState<ModelTier>(
@@ -126,6 +212,48 @@ const Index = () => {
     feedRef.current?.scrollTo({ top: feedRef.current.scrollHeight, behavior: 'smooth' });
   }, [turns, reply]);
 
+  useEffect(() => {
+    if (!imageFullscreen) return;
+
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setImageFullscreen(false);
+    };
+
+    window.addEventListener('keydown', handleEscape);
+    return () => window.removeEventListener('keydown', handleEscape);
+  }, [imageFullscreen]);
+
+
+  const generateConsoleImage = async (prompt: string): Promise<boolean> => {
+    setImageGenerating(true);
+    setImageError('');
+
+    try {
+      await streamImage(prompt, (dataUrl, isFinal) => {
+        if (!isFinal) return;
+
+        const image = new Image();
+        image.onload = () => {
+          setGeneratedImage({ dataUrl, prompt });
+          rememberGeneratedImage(dataUrl, prompt);
+          setImageError('');
+        };
+        image.onerror = () => {
+          setImageError('The generated image could not be decoded. Your previous image has been preserved.');
+        };
+        image.src = dataUrl;
+      });
+      return true;
+    } catch (error) {
+      const message = error instanceof Error
+        ? error.message
+        : 'Unknown image-generation error.';
+      setImageError(message);
+      return false;
+    } finally {
+      setImageGenerating(false);
+    }
+  };
 
   const stopMeter = () => {
     meterRef.current?.stop();
@@ -150,16 +278,14 @@ const Index = () => {
   const renderPanel = (id: string) => {
     switch (id) {
       case 'api': return <ApiKeysSection />;
-      case 'transcript': return <TranscriptSection />;
+      case 'transcript': return <ChatSection />;
       case 'contacts': return <ContactsSection />;
 
       case 'voicecmd': return <VoiceCommandsSection />;
       case 'health': return <HealthSection />;
       case 'audit': return <AuditSection />;
       case 'mission': return <MissionControl onOpenSection={setPanel} />;
-      case 'chat': return <ChatSection />;
       case 'research': return <ResearchSection />;
-      case 'generate': return <ImageGenSection />;
       case 'cinema': return <VideoStoryboardSection />;
       case 'docs': return <DocumentSection />;
       case 'dashboard': return <DashboardSection />;
@@ -180,6 +306,12 @@ const Index = () => {
   };
 
   const say = (text: string) => {
+    if (muted) {
+      stopMeter();
+      setState('idle');
+      return;
+    }
+
     stopMeter();
     setState('speaking');
     meterRef.current = speechLevelMeter(setLevel);
@@ -189,21 +321,143 @@ const Index = () => {
     });
   };
 
-  const ask = async (text: string, audio?: string) => {
-    if (!text.trim()) return;
+  const toggleMute = () => {
+    const next = !muted;
+    setMuted(next);
+
+    try {
+      localStorage.setItem('exile.console.muted', String(next));
+    } catch {
+      // The mute button still works for this session if storage is unavailable.
+    }
+
+    if (next) {
+      if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+        window.speechSynthesis.cancel();
+      }
+      stopMeter();
+      setState((current) => current === 'speaking' ? 'idle' : current);
+    }
+  };
+
+  const handleFiles = async (fileList: FileList | null) => {
+    if (!fileList?.length) return;
+    setAttachmentError('');
+    const accepted: ConsoleAttachment[] = [];
+    let totalBytes = attachments.reduce((sum, item) => sum + item.file.size, 0);
+
+    for (const file of Array.from(fileList)) {
+      if (attachments.length + accepted.length >= MAX_ATTACHMENTS) {
+        setAttachmentError(`You can attach up to ${MAX_ATTACHMENTS} files.`);
+        break;
+      }
+      if (file.size > MAX_ATTACHMENT_BYTES) {
+        setAttachmentError(`${file.name} exceeds the 10 MB per-file limit.`);
+        continue;
+      }
+      if (totalBytes + file.size > MAX_TOTAL_ATTACHMENT_BYTES) {
+        setAttachmentError('Attachments cannot exceed 15 MB in total.');
+        continue;
+      }
+
+      const name = file.name.toLowerCase();
+      const isImage = /^image\/(png|jpeg|webp)$/i.test(file.type) || /\.(png|jpe?g|webp)$/i.test(name);
+      const isPdf = file.type === 'application/pdf' || name.endsWith('.pdf');
+      const isText = TEXT_FILE_EXTENSIONS.test(name) || file.type.startsWith('text/') || file.type === 'application/json';
+      if (!isImage && !isPdf && !isText) {
+        setAttachmentError(`${file.name}: unsupported file type.`);
+        continue;
+      }
+
+      try {
+        const item: ConsoleAttachment = {
+          id: crypto.randomUUID(), file,
+          kind: isImage ? 'image' : isPdf ? 'pdf' : 'text',
+        };
+        if (isImage) {
+          if (!/^image\/(png|jpeg|webp)$/i.test(file.type)) {
+            setAttachmentError(`${file.name}: choose a valid PNG, JPEG, or WebP image.`);
+            continue;
+          }
+          item.dataUrl = await fileToDataUrl(file);
+        } else if (isPdf) {
+          const pdf = await pdfjsLib.getDocument({
+            data: new Uint8Array(await file.arrayBuffer()),
+          }).promise;
+          const pages: string[] = [];
+          let chars = 0;
+          const limit = Math.min(pdf.numPages, MAX_PDF_PAGES);
+          for (let pageNo = 1; pageNo <= limit && chars < MAX_ATTACHMENT_TEXT; pageNo++) {
+            const page = await pdf.getPage(pageNo);
+            const content = await page.getTextContent();
+            const pageText = content.items.map((part) => ('str' in part ? part.str : '')).join(' ');
+            pages.push(pageText);
+            chars += pageText.length;
+          }
+          item.extractedText = pages.join('\n').slice(0, MAX_ATTACHMENT_TEXT);
+          if (pdf.numPages > MAX_PDF_PAGES) {
+            setAttachmentError(`${file.name}: only the first ${MAX_PDF_PAGES} pages will be read.`);
+          }
+          if (!item.extractedText.trim()) {
+            setAttachmentError(`${file.name}: no selectable text found; scanned PDFs need OCR.`);
+          }
+        } else {
+          item.extractedText = (await file.text()).slice(0, MAX_ATTACHMENT_TEXT);
+        }
+        accepted.push(item);
+        totalBytes += file.size;
+      } catch (error) {
+        console.error('Attachment processing failed:', error);
+        setAttachmentError(`Could not read ${file.name}.`);
+      }
+    }
+    if (accepted.length) setAttachments((current) => [...current, ...accepted].slice(0, MAX_ATTACHMENTS));
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  const ask = async (text: string, audio?: string, attached: ConsoleAttachment[] = []) => {
+    if (!text.trim() && !attached.length) return;
+    const directive = text.trim() || 'Please inspect and summarize the attached file(s).';
+    const attachmentLabels = attached.length
+      ? `\n\n[Attached files: ${attached.map((item) => item.file.name).join(', ')}]`
+      : '';
+    const userTurnText = `${directive}${attachmentLabels}`;
+    const extracted = attached
+      .filter((item) => item.extractedText)
+      .map((item) => `\n\n[Attached file: ${item.file.name}]\n${item.extractedText}`)
+      .join('');
+    const promptWithFiles = `${directive}${extracted}`.slice(0, MAX_COMBINED_PROMPT);
+    const imageAttachments = attached.filter((item) => item.kind === 'image' && item.dataUrl);
     setInput('');
+    setAttachments([]);
+    setAttachmentError('');
     setReply('');
     stopMeter();
     setState('thinking');
 
-    addTurn('user', text.trim());
+    const userTurn = addTurn('user', userTurnText);
     if (audio !== undefined) {
-      addVoiceClip({ id: crypto.randomUUID(), audio, transcript: text.trim(), at: Date.now() });
+      addVoiceClip({ id: crypto.randomUUID(), audio, transcript: directive, at: Date.now() });
     }
     const exileTurn = addTurn('exile', '…');
 
-    const agent = routeToAgent(text);
-    logReasoning(agent.name, 'Received directive', text);
+    // Generate images directly in the Console without requiring cloud chat.
+    if (!attached.length && (/\b(generate|create|make|draw|paint|design)\b.{0,100}\b(image|picture|artwork|illustration|logo|wallpaper|portrait|icon)\b/i.test(directive)
+      || /\b(image|picture|artwork|illustration|logo|wallpaper)\b.{0,60}\b(of|showing|featuring)\b/i.test(directive)
+      || /\b(draw|paint)\b/i.test(directive))) {
+      const succeeded = await generateConsoleImage(directive);
+      const result = succeeded
+        ? 'Image generated successfully in the Console.'
+        : 'Image generation failed. See the image error displayed in the Console.';
+      updateTurn(exileTurn.id, result);
+      setReply(result);
+      setState('idle');
+      if (succeeded) say(result);
+      return;
+    }
+
+    const agent = routeToAgent(directive);
+    logReasoning(agent.name, 'Received directive', directive);
 
     const finish = (t: string) => {
       updateTurn(exileTurn.id, t);
@@ -211,7 +465,12 @@ const Index = () => {
       say(t);
     };
 
-    if (!online) return finish(offlineRespond(text).text);
+    if (!online) {
+      if (imageAttachments.length) {
+        return finish('Image analysis requires an online AI provider with vision support. The attached image was not analyzed.');
+      }
+      return finish(offlineRespond(promptWithFiles).text);
+    }
 
     const convo: Record<string, unknown>[] = [
       ...(memoryContext() ? [{ role: 'system', content: memoryContext() }] : []),
@@ -219,13 +478,25 @@ const Index = () => {
       ...listTurns()
         .slice(-20)
         .filter((t) => t.text && t.text !== '…' && t.id !== exileTurn.id)
-        .map((t) => ({ role: t.role === 'user' ? 'user' : 'assistant', content: t.text })),
+        .map((t) => {
+          if (t.id !== userTurn.id) return { role: t.role === 'user' ? 'user' : 'assistant', content: t.text };
+          const contentText = promptWithFiles;
+          const content = imageAttachments.length
+            ? [
+                { type: 'text', text: contentText },
+                ...imageAttachments.map((item) => ({ type: 'image_url', image_url: { url: item.dataUrl! } })),
+              ]
+            : contentText;
+          return { role: 'user', content };
+        }),
     ];
 
     const toolCtx: ToolContext = {
       openSection: (id) => setPanel(id),
       approve: (summary) => new Promise<boolean>((resolve) => setPending({ summary, resolve })),
-      renderImage: () => setPanel('generate'),
+      generateImage: (prompt) => {
+        void generateConsoleImage(prompt);
+      },
     };
 
     try {
@@ -272,7 +543,11 @@ const Index = () => {
     } catch (err) {
       const reason = err instanceof AiError || err instanceof Error ? err.message : 'unknown fault';
       logReasoning(agent.name, 'Cloud link failed — local reasoning engaged', reason);
-      finish(`${offlineRespond(text).text}\n\n— cloud link unavailable (${reason}); answered locally.`);
+      if (imageAttachments.length) {
+        finish(`I couldn't analyze the attached image. Check that your online provider and selected model support vision. (${reason})`);
+      } else {
+        finish(`${offlineRespond(promptWithFiles).text}\n\n— cloud link unavailable (${reason}); answered locally.`);
+      }
     }
   };
 
@@ -331,7 +606,42 @@ const Index = () => {
   };
 
 
+  const startNewChat = () => {
+    startNewSession();
+    setInput("");
+    setReply("");
+    setTurns([]);
+    setGeneratedImage(null);
+    setImageError("");
+    setImageFullscreen(false);
+    setPanel(null);
+    setSettingsOpen(false);
+    setState("idle");
+  };
+
   if (locked) return <LockScreen onUnlock={() => setLocked(false)} />;
+
+  // WhatsApp is a full-window workspace, not a small modal overlay.
+  if (panel === 'whatsapp') {
+    return (
+      <div className="fixed inset-0 z-[55] flex flex-col bg-slate-950 text-cyan-100">
+        <header className="h-12 shrink-0 flex items-center justify-between border-b border-cyan-500/20 bg-slate-950 px-4">
+          <button
+            onClick={() => setPanel(null)}
+            className="flex items-center gap-2 rounded-md px-3 py-2 text-sm text-cyan-200 hover:bg-cyan-500/10"
+            aria-label="Return to Exile AI"
+          >
+            <X className="h-4 w-4" />
+            Back to Exile
+          </button>
+          <span className="text-xs tracking-[0.2em] text-cyan-400/70">MESSAGES</span>
+        </header>
+        <main className="min-h-0 flex-1 overflow-hidden">
+          {renderPanel('whatsapp')}
+        </main>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-slate-950 text-cyan-100 relative overflow-hidden flex flex-col">
@@ -345,8 +655,8 @@ const Index = () => {
       />
 
       {/* top bar */}
-      <header className="relative flex items-center justify-between px-5 pt-5">
-        <div className="text-[10px] tracking-[0.4em] text-cyan-400/70 space-y-1 pl-28">
+      <header className="relative z-10 flex items-center justify-between px-5 pt-5">
+        <div className="text-[10px] tracking-[0.4em] text-cyan-400/70 space-y-1">
           <div className="flex items-center gap-1.5">
             {online ? <Wifi className="w-3 h-3" /> : <WifiOff className="w-3 h-3 text-amber-400" />}
             <span>{online ? 'DATA LINK ACTIVE' : 'LOCAL MODE'}</span>
@@ -354,6 +664,33 @@ const Index = () => {
           <div className="font-mono text-cyan-400/50">{time.toLocaleTimeString()}</div>
         </div>
         <div className="flex items-center gap-2">
+          <ActivityCenter />
+          <button
+            type="button"
+            onClick={startNewChat}
+            aria-label="Start a new chat"
+            title="Start a new chat"
+            className="h-11 px-3 rounded-full border border-emerald-500/40 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20 transition flex items-center gap-2 text-[9px] tracking-[0.15em]"
+          >
+            <FilePlus2 className="w-4 h-4" />
+            <span>NEW CHAT</span>
+          </button>
+          <button
+            onClick={toggleMute}
+            aria-label={muted ? 'Unmute EXILE voice' : 'Mute EXILE voice'}
+            aria-pressed={muted}
+            title={muted ? 'Unmute EXILE voice' : 'Mute EXILE voice'}
+            className={`h-11 px-3 rounded-full border text-[9px] tracking-[0.2em] transition flex items-center gap-2 ${
+              muted
+                ? 'border-amber-400/50 bg-amber-500/10 text-amber-300'
+                : 'border-cyan-500/40 bg-slate-900/50 text-cyan-300 hover:bg-cyan-500/15'
+            }`}
+          >
+            {muted
+              ? <VolumeX className="w-4 h-4" />
+              : <Volume2 className="w-4 h-4" />}
+            <span>{muted ? 'MUTED' : 'VOICE ON'}</span>
+          </button>
           <button
             onClick={() => {
               const next: ModelTier = tier === 'fast' ? 'deep' : 'fast';
@@ -367,10 +704,11 @@ const Index = () => {
           </button>
           <button
             onClick={() => setSettingsOpen(true)}
-            aria-label="Settings"
-            className="w-11 h-11 rounded-full border border-cyan-500/40 bg-slate-900/50 flex items-center justify-center text-cyan-300 hover:bg-cyan-500/15 hover:shadow-[0_0_20px_rgba(34,211,238,0.35)] transition"
+            aria-label="Open navigation menu"
+            title="Menu"
+            className="w-11 h-11 rounded-xl border border-cyan-500/40 bg-slate-900/70 flex items-center justify-center text-cyan-300 hover:bg-cyan-500/15 transition"
           >
-            <Settings className="w-5 h-5" />
+            <Menu className="w-5 h-5" />
           </button>
         </div>
       </header>
@@ -401,13 +739,17 @@ const Index = () => {
                 <div className="text-[9px] tracking-[0.3em] text-cyan-400/50 mb-1">
                   {t.role === 'user' ? 'YOU' : 'EXILE'}
                 </div>
-                <p
+                <div
                   className={`text-base sm:text-lg leading-8 whitespace-pre-wrap ${
                     t.role === 'user' ? 'text-cyan-300/85' : 'text-cyan-100/90'
                   }`}
                 >
-                  {t.text}
-                </p>
+                  {t.role === 'user' ? (
+                    <span>{t.text}</span>
+                  ) : (
+                    renderExileMessage(t.text)
+                  )}
+                </div>
               </div>
             ))
           )}
@@ -418,16 +760,101 @@ const Index = () => {
             </p>
           )}
         </div>
+
+        {(imageGenerating || imageError || generatedImage) && (
+          <section className="mx-auto w-full max-w-3xl overflow-hidden rounded-xl border border-[#c4a253]/45 bg-[#080907] p-3 text-[#f5edda] shadow-[0_0_24px_rgba(196,162,83,0.08)]">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-[10px] font-semibold uppercase tracking-[0.3em] text-[#e0c478]">
+                  GOLDEN CANVAS
+                </p>
+                <p className="mt-1 text-[10px] text-[#a9a18e]">
+                  {imageGenerating ? 'Creating your artwork…' : imageError ? 'Generation notice' : 'Your artwork · Click to expand'}
+                </p>
+              </div>
+              {generatedImage && (
+                <a
+                  href={generatedImage.dataUrl}
+                  download="exile-generated-image.png"
+                  className="shrink-0 rounded-md border border-[#c4a253]/40 px-3 py-2 text-xs text-[#e6c875] hover:bg-[#c4a253]/10"
+                >
+                  Save image
+                </a>
+              )}
+            </div>
+
+            <div className="relative flex min-h-36 max-h-[35vh] items-center justify-center overflow-hidden rounded-lg border border-[#c4a253]/30 bg-[radial-gradient(ellipse_at_center,_#282216_0%,_#11110d_55%,_#080907_100%)] p-2">
+              <div className="pointer-events-none absolute inset-2 rounded-md border border-[#c4a253]/10" />
+
+              {generatedImage && (
+                <button
+                  type="button"
+                  onClick={() => setImageFullscreen(true)}
+                  aria-label="Open generated image full screen"
+                  className="relative z-10 flex max-h-[33vh] max-w-full cursor-zoom-in items-center justify-center focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#e6c875]"
+                >
+                  <img
+                    src={generatedImage.dataUrl}
+                    alt={generatedImage.prompt}
+                    className="max-h-[33vh] max-w-full rounded-md object-contain"
+                  />
+                </button>
+              )}
+
+              {!generatedImage && imageGenerating && (
+                <div className="relative z-10 px-4 py-8 text-center">
+                  <div className="mx-auto mb-3 h-7 w-7 animate-spin rounded-full border-2 border-[#c4a253]/25 border-t-[#e6c875]" />
+                  <p className="text-xs tracking-wide text-[#e6c875]">Rendering your vision</p>
+                  <p className="mt-1 text-[10px] text-[#a9a18e]">Generating locally on your device</p>
+                </div>
+              )}
+
+              {!generatedImage && !imageGenerating && imageError && (
+                <p className="relative z-10 max-w-md px-4 py-6 text-center text-sm text-red-300" role="alert">
+                  {imageError}
+                </p>
+              )}
+            </div>
+
+            {imageError && generatedImage && (
+              <p role="alert" className="mt-2 text-xs text-amber-300">{imageError}</p>
+            )}
+
+            {generatedImage && (
+              <p className="mt-2 break-words text-xs leading-5 text-[#c6a75b]">
+                {generatedImage.prompt}
+              </p>
+            )}
+          </section>
+        )}
       </main>
 
 
 
       {/* type bar */}
       <footer className="relative px-5 pb-7">
+        {attachments.length > 0 && (
+          <div className="mx-auto mb-2 flex max-w-xl flex-wrap gap-2" aria-label="Attached files">
+            {attachments.map((item) => (
+              <div key={item.id} title={item.file.name} className="flex max-w-full items-center gap-2 rounded-lg border border-[#c4a253]/50 bg-[#080907] px-2 py-1 text-xs text-[#f5edda]">
+                {item.kind === 'image' ? <Camera className="h-3.5 w-3.5 text-[#e0c478]" /> : <AttachmentFileIcon className="h-3.5 w-3.5 text-[#e0c478]" />}
+                <span className="max-w-48 truncate">{item.file.name}</span>
+                <button type="button" aria-label={`Remove ${item.file.name}`} title={`Remove ${item.file.name}`} onClick={() => setAttachments((current) => current.filter((entry) => entry.id !== item.id))} className="text-[#e0c478] hover:text-red-300">
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+        {attachmentError && <p role="status" className="mx-auto mb-2 max-w-xl text-xs text-amber-300">{attachmentError}</p>}
         <form
-          onSubmit={(e) => { e.preventDefault(); ask(input); }}
+          onSubmit={(e) => { e.preventDefault(); void ask(input, undefined, attachments); }}
           className="mx-auto max-w-xl flex items-center gap-2 rounded-full border border-cyan-500/35 bg-slate-900/70 backdrop-blur px-4 py-2 shadow-[0_0_30px_rgba(34,211,238,0.15)]"
         >
+          <input ref={fileInputRef} type="file" multiple className="hidden" accept="image/png,image/jpeg,image/webp,application/pdf,text/plain,application/json,.txt,.md,.markdown,.csv,.json,.log,.xml,.yaml,.yml,.toml,.js,.jsx,.ts,.tsx,.py,.html,.css,.sql,.java,.c,.h,.cpp,.hpp,.rs,.go,.sh" onChange={(event) => void handleFiles(event.target.files)} />
+          <button type="button" onClick={() => fileInputRef.current?.click()} disabled={attachments.length >= MAX_ATTACHMENTS} className="text-[#e0c478] hover:text-[#f5edda] disabled:opacity-40" aria-label="Attach files" title="Attach files">
+            <Paperclip className="h-4 w-4" />
+          </button>
           <button type="button" onClick={listen} className="text-cyan-300/80 hover:text-cyan-100" aria-label="Voice input">
             <Mic className="w-4 h-4" />
           </button>
@@ -437,7 +864,7 @@ const Index = () => {
             placeholder="Speak or type a directive…"
             className="flex-1 bg-transparent outline-none text-sm placeholder:text-cyan-500/40 text-cyan-50"
           />
-          <Button type="submit" size="icon" variant="ghost" className="h-8 w-8 rounded-full text-cyan-300 hover:bg-cyan-500/15">
+          <Button type="submit" disabled={!input.trim() && attachments.length === 0} size="icon" variant="ghost" className="h-8 w-8 rounded-full text-cyan-300 hover:bg-cyan-500/15">
             <Send className="w-4 h-4" />
           </Button>
         </form>
@@ -450,19 +877,56 @@ const Index = () => {
       <Sheet open={settingsOpen} onOpenChange={setSettingsOpen}>
         <SheetContent side="right" className="w-full sm:max-w-sm bg-slate-950 border-cyan-500/30 text-cyan-100 overflow-y-auto">
           <SheetHeader>
-            <SheetTitle className="text-cyan-100 tracking-[0.3em] text-sm">SETTINGS</SheetTitle>
+            <SheetTitle className="text-cyan-100 tracking-[0.3em] text-sm">EXILE MENU</SheetTitle>
           </SheetHeader>
-          <div className="grid grid-cols-3 gap-2 mt-6">
-            {menuItems.map((item) => (
-              <button
-                key={item.id}
-                onClick={() => { setPanel(item.id); setSettingsOpen(false); }}
-                className="flex flex-col items-center gap-1 p-3 rounded-md border border-cyan-500/20 bg-slate-900/50 text-cyan-300/80 hover:bg-cyan-500/10 hover:text-cyan-100 transition"
-              >
-                <item.icon className="w-5 h-5" />
-                <span className="text-[9px] tracking-widest uppercase">{item.label}</span>
-              </button>
-            ))}
+          <div className="mt-5 space-y-2">
+            <button
+              onClick={() => { setPanel(null); setSettingsOpen(false); }}
+              className="flex w-full items-center gap-3 rounded-lg border border-cyan-500/20 bg-slate-900/60 px-3 py-3 text-left text-sm text-cyan-100 hover:bg-cyan-500/10"
+            >
+              <Home className="h-5 w-5 text-cyan-300" />
+              <span className="flex-1">Home</span>
+            </button>
+
+            {navGroups.filter((group) => group.id !== 'Home').map((group) => {
+              const GroupIcon = group.icon;
+              const selected = menuCategory === group.id;
+              const tools = menuItems.filter((item) => group.items.includes(item.id));
+              return (
+                <div key={group.id} className="overflow-hidden rounded-lg border border-cyan-500/20">
+                  <button
+                    onClick={() => setMenuCategory(selected ? '' : group.id)}
+                    aria-expanded={selected}
+                    className={`flex w-full items-center gap-3 px-3 py-3 text-left text-sm transition ${
+                      selected ? 'bg-cyan-500/10 text-cyan-100' : 'bg-slate-900/60 text-cyan-200 hover:bg-cyan-500/10'
+                    }`}
+                  >
+                    <GroupIcon className="h-5 w-5 text-cyan-300" />
+                    <span className="flex-1">{group.label}</span>
+                    <span className="text-xs text-cyan-500/70">{tools.length}</span>
+                    <span className="text-cyan-400/70">{selected ? '−' : '+'}</span>
+                  </button>
+                  {selected && (
+                    <div className="space-y-1 border-t border-cyan-500/15 bg-slate-950/70 p-2">
+                      {tools.map((item) => {
+                        const ItemIcon = item.icon;
+                        return (
+                          <button
+                            key={item.id}
+                            onClick={() => { setPanel(item.id); setSettingsOpen(false); }}
+                            className="flex w-full items-center gap-3 rounded-md px-3 py-2.5 text-left text-sm text-cyan-100/85 transition hover:bg-cyan-500/10 hover:text-cyan-50"
+                          >
+                            <ItemIcon className="h-4 w-4 text-cyan-400/80" />
+                            <span className="flex-1">{item.label}</span>
+                            <span className="text-cyan-500/50">›</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
           <button
             onClick={() => { setSettingsOpen(false); setLocked(true); }}
@@ -472,6 +936,54 @@ const Index = () => {
           </button>
         </SheetContent>
       </Sheet>
+
+      {imageFullscreen && generatedImage && (
+        <div
+          className="fixed inset-0 z-[100] flex flex-col bg-[#080907]/[0.98] p-3 text-[#f5edda] sm:p-6"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Golden Canvas full-screen image"
+          onClick={() => setImageFullscreen(false)}
+        >
+          <div className="mx-auto flex w-full max-w-7xl items-center justify-between gap-4 pb-4">
+            <div className="min-w-0">
+              <p className="text-xs font-semibold uppercase tracking-[0.3em] text-[#e6c875]">
+                EXILE · GOLDEN CANVAS
+              </p>
+              <p className="mt-1 truncate text-xs text-[#a9a18e]">{generatedImage.prompt}</p>
+            </div>
+            <div className="flex shrink-0 items-center gap-3">
+              <a
+                href={generatedImage.dataUrl}
+                download="exile-generated-image.png"
+                onClick={(event) => event.stopPropagation()}
+                className="rounded-md border border-[#c4a253]/40 px-3 py-2 text-xs text-[#e6c875] hover:bg-[#c4a253]/10"
+              >
+                Save
+              </a>
+              <button
+                type="button"
+                onClick={() => setImageFullscreen(false)}
+                aria-label="Close full-screen image"
+                className="rounded-md border border-[#c4a253]/40 p-2 text-[#e6c875] hover:bg-[#c4a253]/10"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+          </div>
+          <div className="flex min-h-0 flex-1 items-center justify-center overflow-hidden rounded-xl border border-[#c4a253]/30 bg-[radial-gradient(ellipse_at_center,_#282216_0%,_#11110d_55%,_#080907_100%)] p-3 sm:p-6">
+            <img
+              src={generatedImage.dataUrl}
+              alt={generatedImage.prompt}
+              onClick={(event) => event.stopPropagation()}
+              className="max-h-full max-w-full object-contain"
+            />
+          </div>
+          <p className="pt-3 text-center text-[10px] tracking-widest text-[#a9a18e]">
+            PRESS ESC OR CLICK OUTSIDE TO RETURN TO CHAT
+          </p>
+        </div>
+      )}
 
       {/* section overlay */}
       {panel && (
