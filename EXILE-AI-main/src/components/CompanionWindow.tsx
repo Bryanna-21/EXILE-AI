@@ -4,15 +4,6 @@ import { isVenomModeEnabled, onVenomModeChanged } from "@/lib/venomMode";
 import ArcReactor from "./ArcReactor";
 import "./CompanionWindow.css";
 
-declare global {
-interface Window {
-exileDesktop?: {
-openDashboard: () => void;
-minimizeCompanion: () => void;
-closeCompanion: () => void;
-};
-}
-}
 
 const CompanionWindow = () => {
 const [venomMode, setVenomMode] = useState(isVenomModeEnabled);
