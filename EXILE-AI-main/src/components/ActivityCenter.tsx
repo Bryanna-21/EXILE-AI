@@ -61,7 +61,7 @@ export default function ActivityCenter() {
       id: `turn-${turn.id}`,
       at: turn.at,
       kind: "ai",
-      title: turn.role === "assistant" ? "Exile · AI response" : "Chat · Your message",
+      title: turn.role === "exile" ? "Exile · AI response" : "Chat · Your message",
       summary: shortText(turn.text),
     }));
 

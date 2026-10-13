@@ -111,20 +111,36 @@ def main() -> None:
     signal.signal(signal.SIGINT, shutdown)
     signal.signal(signal.SIGTERM, shutdown)
 
+    dev_mode = "--dev" in sys.argv
+    if not dev_mode:
+        dist = ROOT / "dist" / "index.html"
+        src_mtime = max((f.stat().st_mtime for f in (ROOT / "src").rglob("*") if f.is_file()), default=0)
+        if not dist.exists() or dist.stat().st_mtime < src_mtime:
+            info("Building EXILE UI (first run or after changes)…")
+            if subprocess.run([NPM, "run", "build"], cwd=ROOT, env=env).returncode != 0:
+                info("Build failed — falling back to dev mode.")
+                dev_mode = True
+
     info("Starting local API server…")
     procs.append(subprocess.Popen(["node", str(ROOT / "local" / "server.mjs")], cwd=ROOT, env=env))
     if not wait_for(f"http://localhost:{API_PORT}/health"):
-        shutdown()
-
+        die("Local API server did not start. Is port %d in use?" % API_PORT)
     info(f"API online  -> http://localhost:{API_PORT}")
-    info("Starting EXILE UI…")
-    procs.append(subprocess.Popen([NPM, "run", "dev", "--", "--port", str(UI_PORT)], cwd=ROOT, env=env))
 
-    if wait_for(f"http://localhost:{UI_PORT}/", timeout=120):
-        info(f"EXILE ready -> http://localhost:{UI_PORT}")
+    if dev_mode:
+        info("Starting EXILE UI (dev mode)…")
+        procs.append(subprocess.Popen([NPM, "run", "dev", "--", "--port", str(UI_PORT)], cwd=ROOT, env=env))
+        ui = f"http://localhost:{UI_PORT}/"
+        ready = wait_for(ui, timeout=120)
+    else:
+        ui = f"http://localhost:{API_PORT}/"
+        ready = wait_for(ui, timeout=20)
+
+    if ready:
+        info(f"EXILE ready -> {ui}")
         info("Open Settings -> API, paste your keys, then press CONNECT & RUN.")
         try:
-            webbrowser.open(f"http://localhost:{UI_PORT}/")
+            webbrowser.open(ui)
         except Exception:
             pass
     print("\n  Ctrl+C to shut down.\n", flush=True)
