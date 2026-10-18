@@ -41,6 +41,9 @@ import {
   getWhatsAppConversationAIConfig,
   updateWhatsAppConversationAIConfig,
 } from "./whatsapp-conversation.mjs";
+import { arcSystemCore } from "./arc-system-core.mjs";
+import { arcAutonomyEngine } from "./arc-autonomy-engine.mjs";
+import { listEligibleProcesses, terminateSelectedProcess } from "./arc-process-manager.mjs";
 
 const ROOT = process.cwd();
 
@@ -61,6 +64,29 @@ function loadEnv() {
 loadEnv();
 
 const PORT = Number(process.env.EXILE_PORT || 8787);
+const ARC_CONFIG_DIR = path.join(os.homedir(), ".exile-ai");
+const ARC_CONFIG_PATH = path.join(ARC_CONFIG_DIR, "arc-autonomy.json");
+
+// Load only a validated per-app memory limit. Invalid or unreadable
+// configuration falls back to unset; it never enables automatic actions.
+try {
+  if (fs.existsSync(ARC_CONFIG_PATH)) {
+    const saved = JSON.parse(fs.readFileSync(ARC_CONFIG_PATH, "utf8"));
+    if (
+      saved &&
+      Object.prototype.hasOwnProperty.call(saved, "appMemoryLimitMB")
+    ) {
+      const configured = arcAutonomyEngine.setAppMemoryLimitMB(
+        saved.appMemoryLimitMB
+      );
+      if (!configured.ok) {
+        console.warn("[arc] Ignoring invalid saved memory-limit configuration.");
+      }
+    }
+  }
+} catch (error) {
+  console.warn("[arc] Could not load saved configuration:", error.message);
+}
 
 // ---------- provider registry ----------
 const PROVIDERS = [
@@ -239,22 +265,31 @@ async function generateWhatsAppReply({ name, incomingText }) {
 }
 
 async function generateWhatsAppConversationReply({ name, incomingText, history, isGroup, media }) {
+  const requestedProvider = (process.env.EXILE_WHATSAPP_AI_PROVIDER || "")
+    .trim()
+    .toLowerCase();
   const freeOrder = process.env.EXILE_GEMINI_FREE_TIER === "true"
     ? ["gemini", "openrouter"]
     : ["openrouter"];
   const isMedia = media?.type === "image" || media?.type === "video";
   const fileRequest = !isMedia ? detectWhatsAppFileRequest(incomingText) : null;
   const configuredProviders = available();
+
+  // Media analysis keeps its existing Gemini-only route. For text and
+  // document generation, an explicit provider overrides the free-tier order.
+  const providerOrder = requestedProvider ? [requestedProvider] : freeOrder;
   const providers = isMedia
     ? configuredProviders.filter((provider) => provider.id === "gemini")
-    : [
-        ...freeOrder,
-        ...(!fileRequest && configuredProviders.some((provider) => provider.id === "openai")
-          ? ["openai"]
-          : []),
-      ]
+    : providerOrder
         .map((id) => configuredProviders.find((provider) => provider.id === id))
         .filter(Boolean);
+
+  if (!isMedia && requestedProvider && providers.length === 0) {
+    throw new Error(
+      `WhatsApp conversational AI provider "${requestedProvider}" is unavailable. Check the provider name and API key configuration.`
+    );
+  }
+
   const errors = [];
 
   const safeHistory = Array.isArray(history)
@@ -806,6 +841,149 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://localhost:${PORT}`);
 
   try {
+    if (url.pathname.startsWith("/arc/")) {
+      const origin = req.headers.origin;
+      const localOrigin =
+        !origin ||
+        origin === "null" ||
+        origin === "file://" ||
+        /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(origin);
+
+      if (!localOrigin) {
+        return json(res, 403, { error: "ARC API is restricted to the local app." });
+      }
+    }
+
+    if (url.pathname === "/arc/status" ||
+        url.pathname === "/arc/alerts" ||
+        url.pathname === "/arc/history" ||
+        url.pathname === "/arc/processes" ||
+        url.pathname === "/arc/config") {
+      if (req.method !== "GET") {
+        res.setHeader("Allow", "GET");
+        return json(res, 405, { error: "Method not allowed." });
+      }
+      res.setHeader("Cache-Control", "no-store");
+
+      if (url.pathname === "/arc/status") {
+        return json(res, 200, { ok: true, status: arcAutonomyEngine.getStatus() });
+      }
+      if (url.pathname === "/arc/config") {
+        const status = arcAutonomyEngine.getStatus();
+        return json(res, 200, {
+          ok: true,
+          config: {
+            appMemoryLimitMB: status.appMemoryLimitMB,
+            appMemoryLimitConfigured: status.appMemoryLimitConfigured,
+            sustainedAppMemorySeconds: status.policies.sustainedAppMemorySeconds,
+            memoryCriticalPercent: status.policies.memoryCriticalPercent,
+            automaticTerminationEnabled: status.automaticTerminationEnabled,
+            automaticSystemChangesEnabled: status.automaticSystemChangesEnabled,
+          },
+        });
+      }
+      if (url.pathname === "/arc/alerts") {
+        return json(res, 200, { ok: true, alerts: arcAutonomyEngine.getAlerts() });
+      }
+      if (url.pathname === "/arc/history") {
+        return json(res, 200, { ok: true, history: arcAutonomyEngine.getHistory() });
+      }
+
+      try {
+        const processes = await listEligibleProcesses();
+        return json(res, 200, { ok: true, processes });
+      } catch {
+        return json(res, 503, { ok: false, error: "Process inventory is unavailable." });
+      }
+    }
+
+    if (url.pathname === "/arc/system" ||
+        url.pathname === "/arc/diagnostics") {
+      const origin = req.headers.origin;
+      const localOrigin =
+        !origin ||
+        origin === "null" ||
+        origin === "file://" ||
+        /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(origin);
+
+      if (!localOrigin) {
+        return json(res, 403, {
+          error: "ARC API is restricted to the local app."
+        });
+      }
+
+      if (req.method !== "GET") {
+        res.setHeader("Allow", "GET");
+        return json(res, 405, { error: "Method not allowed." });
+      }
+
+      res.setHeader("Cache-Control", "no-store");
+
+      try {
+        let snapshot = arcAutonomyEngine.latestSnapshot;
+
+        // On cold start, share the engine's initial sample instead of
+        // launching a separate PowerShell collector.
+        if (!snapshot) {
+          snapshot = await arcAutonomyEngine.sampleNow();
+        }
+
+        if (!snapshot) {
+          res.setHeader("Retry-After", "2");
+          return json(res, 503, {
+            ok: false,
+            error: "ARC telemetry is initializing. Retry shortly."
+          });
+        }
+
+        const sampledAtMs = Date.parse(snapshot.timestamp ?? "");
+        const ageMs = Number.isFinite(sampledAtMs)
+          ? Math.max(0, Date.now() - sampledAtMs)
+          : null;
+        const maxAgeMs =
+          arcAutonomyEngine.getStatus().policies.sampleIntervalMs * 2;
+        const stale = ageMs === null || ageMs > maxAgeMs;
+
+        // Never block an existing dashboard response on a refresh.
+        // sampleNow() coalesces this with any periodic sample already running.
+        if (stale && !arcAutonomyEngine.sampling) {
+          void arcAutonomyEngine.sampleNow().catch((error) => {
+            console.error("[arc] background telemetry refresh failed:", error.message);
+          });
+        }
+
+        const freshness = {
+          sampledAt: snapshot.timestamp ?? null,
+          ageMs,
+          stale,
+          refreshing: arcAutonomyEngine.sampling,
+        };
+
+        if (url.pathname === "/arc/system") {
+          return json(res, 200, {
+            ok: true,
+            mode: "read-only",
+            snapshot,
+            freshness
+          });
+        }
+
+        return json(res, 200, {
+          ok: true,
+          mode: "read-only",
+          sampledAt: snapshot.timestamp ?? null,
+          freshness,
+          diagnostics: arcSystemCore.evaluateDiagnostics(snapshot)
+        });
+      } catch (error) {
+        console.error("[arc] system collection failed:", error.message);
+        return json(res, 503, {
+          ok: false,
+          error: "ARC system diagnostics are temporarily unavailable."
+        });
+      }
+    }
+
     if (url.pathname === "/health") {
       return json(res, 200, {
         status: "online",
@@ -880,6 +1058,223 @@ const server = http.createServer(async (req, res) => {
     }
 
     const body = await readBody(req);
+
+    if (url.pathname.startsWith("/arc/")) {
+      const origin = req.headers.origin;
+      const localOrigin =
+        !origin ||
+        origin === "null" ||
+        origin === "file://" ||
+        /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(origin);
+      if (!localOrigin) {
+        return json(res, 403, { error: "ARC API is restricted to the local app." });
+      }
+    }
+
+    if (url.pathname === "/arc/config") {
+      if (req.method !== "POST") {
+        res.setHeader("Allow", "POST");
+        return json(res, 405, { ok: false, error: "Method not allowed." });
+      }
+
+      if (!Object.prototype.hasOwnProperty.call(body, "appMemoryLimitMB")) {
+        return json(res, 400, {
+          ok: false,
+          error: "Provide appMemoryLimitMB as a positive number or null to clear it.",
+        });
+      }
+
+      const previousLimit = arcAutonomyEngine.getStatus().appMemoryLimitMB;
+      const result = arcAutonomyEngine.setAppMemoryLimitMB(body.appMemoryLimitMB);
+
+      if (!result.ok) {
+        return json(res, 400, result);
+      }
+
+      const config = {
+        appMemoryLimitMB: result.appMemoryLimitMB,
+        updatedAt: new Date().toISOString(),
+      };
+
+      let tempPath;
+      try {
+        await fs.promises.mkdir(ARC_CONFIG_DIR, { recursive: true });
+        tempPath = `${ARC_CONFIG_PATH}.${process.pid}.tmp`;
+        await fs.promises.writeFile(
+          tempPath,
+          JSON.stringify(config, null, 2) + "\n",
+          { encoding: "utf8", flag: "w" }
+        );
+        await fs.promises.rename(tempPath, ARC_CONFIG_PATH);
+      } catch (error) {
+        if (tempPath) {
+          try { await fs.promises.unlink(tempPath); } catch {}
+        }
+
+        // Do not leave memory running with a setting that failed to persist.
+        arcAutonomyEngine.setAppMemoryLimitMB(previousLimit);
+
+        console.error("[arc] Could not persist configuration:", error.message);
+        return json(res, 500, {
+          ok: false,
+          error: "Could not save ARC configuration. The previous setting was restored.",
+        });
+      }
+
+      return json(res, 200, {
+        ok: true,
+        config: {
+          appMemoryLimitMB: result.appMemoryLimitMB,
+          appMemoryLimitConfigured: result.appMemoryLimitMB !== null,
+          sustainedAppMemorySeconds:
+            arcAutonomyEngine.getStatus().policies.sustainedAppMemorySeconds,
+          memoryCriticalPercent:
+            arcAutonomyEngine.getStatus().policies.memoryCriticalPercent,
+          automaticTerminationEnabled: false,
+          automaticSystemChangesEnabled: false,
+        },
+      });
+    }
+
+    const alertDecisionMatch = url.pathname.match(/^\/arc\/alerts\/([^/]+)\/decision$/);
+    if (alertDecisionMatch && req.method === "POST") {
+      const result = arcAutonomyEngine.decideAlert(
+        decodeURIComponent(alertDecisionMatch[1]),
+        body.decision
+      );
+      return json(res, result.ok ? 200 : 400, result);
+    }
+
+    if (url.pathname === "/arc/terminate" && req.method === "POST") {
+      try {
+        // Collect a new sample, then fail closed on stale or invalid telemetry.
+        await arcAutonomyEngine.sampleNow();
+
+        const snapshot = arcAutonomyEngine.latestSnapshot;
+        const sampledAt = Date.parse(snapshot?.timestamp ?? "");
+        const sampleAgeMs = Date.now() - sampledAt;
+
+        if (
+          !Number.isFinite(sampledAt) ||
+          sampleAgeMs < -5000 ||
+          sampleAgeMs > 30000
+        ) {
+          return json(res, 409, {
+            ok: false,
+            error: "ARC could not verify a fresh system sample. No process was terminated.",
+            memoryPercent: null,
+          });
+        }
+
+        const memory = snapshot?.memory ?? snapshot?.ram ?? {};
+        const directValues = [
+          memory.usagePercent,
+          memory.usedPercent,
+          memory.percentUsed,
+          snapshot?.memoryUsagePercent,
+          snapshot?.ramUsagePercent,
+        ];
+
+        let memoryPercent = null;
+        let directMemoryReadingProvided = false;
+        let directMemoryReadingInvalid = false;
+
+        for (const value of directValues) {
+          if (
+            value === null ||
+            value === undefined ||
+            (typeof value === "string" && value.trim() === "")
+          ) {
+            continue;
+          }
+
+          directMemoryReadingProvided = true;
+          const number = Number(value);
+
+          if (!Number.isFinite(number) || number < 0 || number > 100) {
+            directMemoryReadingInvalid = true;
+            break;
+          }
+
+          memoryPercent = number;
+          break;
+        }
+
+        // Never replace a supplied but invalid direct reading with a
+        // capacity-based estimate. Unverifiable telemetry must fail closed.
+        if (directMemoryReadingInvalid) {
+          return json(res, 409, {
+            ok: false,
+            error: "Invalid direct RAM telemetry. No process was terminated.",
+            memoryPercent: null,
+          });
+        }
+
+        if (!directMemoryReadingProvided && memoryPercent === null) {
+          const pairs = [
+            [memory.totalGB, memory.usedGB, memory.availableGB],
+            [memory.totalBytes, memory.usedBytes, memory.availableBytes],
+          ];
+
+          for (const [rawTotal, rawUsed, rawAvailable] of pairs) {
+            const total = rawTotal == null || String(rawTotal).trim() === ""
+              ? null : Number(rawTotal);
+            const used = rawUsed == null || String(rawUsed).trim() === ""
+              ? null : Number(rawUsed);
+            const available =
+              rawAvailable == null || String(rawAvailable).trim() === ""
+                ? null : Number(rawAvailable);
+
+            if (!Number.isFinite(total) || total <= 0) continue;
+
+            if (used !== null && Number.isFinite(used)) {
+              if (used < 0 || used > total) {
+                memoryPercent = null;
+                break;
+              }
+              memoryPercent = (used / total) * 100;
+              break;
+            }
+
+            if (available !== null && Number.isFinite(available)) {
+              if (available < 0 || available > total) {
+                memoryPercent = null;
+                break;
+              }
+              memoryPercent = ((total - available) / total) * 100;
+              break;
+            }
+          }
+        }
+
+        if (
+          memoryPercent === null ||
+          !Number.isFinite(memoryPercent) ||
+          memoryPercent < 90 ||
+          memoryPercent > 100
+        ) {
+          return json(res, 409, {
+            ok: false,
+            error: "Valid RAM telemetry at or above 90% is required. No process was terminated.",
+            memoryPercent,
+          });
+        }
+
+        const result = await terminateSelectedProcess({
+          pid: body.pid,
+          expectedName: body.expectedName,
+          expectedStartTime: body.expectedStartTime,
+          confirmed: body.confirmed === true,
+          forceConfirmed: body.forceConfirmed === true,
+        });
+        return json(res, result.ok ? 200 : 400, { ...result, memoryPercent });
+      } catch {
+        return json(res, 503, {
+          ok: false,
+          error: "ARC could not verify system state. No termination was requested.",
+        });
+      }
+    }
 
     if (url.pathname === "/whatsapp/conversation-ai" && req.method === "POST") {
       try {
@@ -957,6 +1352,8 @@ configureWhatsAppConversationAI({
 startWhatsAppAutomationScheduler();
 
 server.listen(PORT, "127.0.0.1", () => {
+  const arcStatus = arcAutonomyEngine.start();
+  console.log(`[arc] autonomy monitor ${arcStatus.running ? "started" : "not started"}`);
   const keys = allKeys();
   console.log(`\n  EXILE local API  ->  http://localhost:${PORT}`);
   console.log(`  Providers ready: ${available().map((p) => p.id).join(", ") || "none"}`);

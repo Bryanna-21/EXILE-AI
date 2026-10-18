@@ -17,6 +17,7 @@ app.commandLine.appendSwitch("disk-cache-dir", exileDiskCache);
 app.commandLine.appendSwitch("gpu-cache-dir", exileGpuCache);
 
 let apiProc = null;
+let apiLogStream = null;
 let mainWindow = null;
 let companionWindow = null;
 
@@ -25,6 +26,11 @@ const serverPath = path.join(__dirname, "..", "local", "server.mjs");
 if (!fs.existsSync(serverPath)) return;
 
 try {
+const logPath = path.join(os.homedir(), ".exile-ai", "exile-api.log");
+fs.mkdirSync(path.dirname(logPath), { recursive: true });
+apiLogStream = fs.createWriteStream(logPath, { flags: "a" });
+apiLogStream.write("\n===== EXILE API START " + new Date().toISOString() + " =====\n");
+
 apiProc = spawn(process.execPath, [serverPath], {
 cwd: path.join(__dirname, ".."),
 env: {
@@ -32,14 +38,28 @@ env: {
 ELECTRON_RUN_AS_NODE: "1",
 EXILE_PORT: process.env.EXILE_PORT || "8787",
 },
-stdio: "ignore",
+stdio: ["ignore", "pipe", "pipe"],
 windowsHide: true,
 });
 
-apiProc.on("error", () => {
+const captureApiOutput = (label, chunk) => {
+  if (!apiLogStream) return;
+  for (const line of chunk.toString().split(/\r?\n/)) {
+    if (line) apiLogStream.write("[" + label + "] " + line + "\n");
+  }
+};
+
+apiProc.stdout.on("data", (chunk) => captureApiOutput("stdout", chunk));
+apiProc.stderr.on("data", (chunk) => captureApiOutput("stderr", chunk));
+
+apiProc.on("error", (error) => {
+  apiLogStream?.write("[process error] " + error.message + "\\n");
   apiProc = null;
 });
-apiProc.on("exit", () => {
+apiProc.on("exit", (code, signal) => {
+  apiLogStream?.write("[process exit] code=" + code + " signal=" + signal + "\\n");
+  apiLogStream?.end();
+  apiLogStream = null;
   apiProc = null;
 });
 
@@ -141,16 +161,17 @@ return companionWindow;
 }
 
 
-ipcMain.handle("exile:venom-synthesize", async (event, text) => {
+ipcMain.handle("exile:venom-synthesize", async (event, text, profileId) => {
   // Only the local Electron UI may request speech synthesis.
   if (!event.senderFrame?.url?.startsWith("file://")) return null;
   if (typeof text !== "string" || !text.trim() || text.length > 3000) {
     return null;
   }
 
+  const safeProfileId = profileId === "jarvis" ? "jarvis" : "venom";
   const outputPath = path.join(
     os.tmpdir(),
-    `exile-venom-${process.pid}-${Date.now()}.wav`,
+    `exile-${safeProfileId}-${process.pid}-${Date.now()}.wav`,
   );
   const textBase64 = Buffer.from(text, "utf8").toString("base64");
   const pathBase64 = Buffer.from(outputPath, "utf8").toString("base64");
@@ -162,9 +183,17 @@ ipcMain.handle("exile:venom-synthesize", async (event, text) => {
     `$outPath = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${pathBase64}'))`,
     "$s = New-Object System.Speech.Synthesis.SpeechSynthesizer",
     "try {",
-    "  $voices = @($s.GetInstalledVoices() | ForEach-Object { $_.VoiceInfo.Name })",
-    "  if ($voices -contains 'Microsoft David Desktop') { $s.SelectVoice('Microsoft David Desktop') }",
-    "  $s.Rate = 1",
+    `  $profile = '${safeProfileId}'`,
+    "  $voices = @($s.GetInstalledVoices() | Where-Object { $_.Enabled } | ForEach-Object { $_.VoiceInfo })",
+    "  if ($profile -eq 'jarvis') {",
+    "    $choice = $voices | Where-Object { $_.Culture.Name -eq 'en-GB' -and $_.Gender -eq 'Male' } | Select-Object -First 1",
+    "    if (-not $choice) { $choice = $voices | Where-Object { $_.Culture.Name -eq 'en-GB' } | Select-Object -First 1 }",
+    "  } else {",
+    "    $choice = $voices | Where-Object { $_.Culture.Name -like 'en-*' -and $_.Gender -eq 'Male' } | Select-Object -First 1",
+    "    if (-not $choice) { $choice = $voices | Where-Object { $_.Culture.Name -like 'en-*' } | Select-Object -First 1 }",
+    "  }",
+    "  if ($choice) { $s.SelectVoice($choice.Name) }",
+    `  $s.Rate = ${safeProfileId === "jarvis" ? 0 : -2}`,
     "  $s.Volume = 100",
     "  $s.SetOutputToWaveFile($outPath)",
     "  $s.Speak($text)",

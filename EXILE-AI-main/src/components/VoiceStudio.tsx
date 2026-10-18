@@ -10,6 +10,7 @@ import {
 import {
   VoiceProfile,
   listVoiceProfiles,
+  getBuiltInVoiceProfiles,
   saveVoiceProfile,
   deleteVoiceProfile,
   setActiveVoice,
@@ -32,8 +33,11 @@ const VoiceStudio = () => {
   const chunks = useRef<BlobPart[]>([]);
 
   const refresh = () => {
-    setProfiles(listVoiceProfiles());
-    setActiveId(getActiveVoiceId());
+    setProfiles([...getBuiltInVoiceProfiles(), ...listVoiceProfiles()]);
+    setActiveId(
+      getActiveVoiceId() ??
+      (isVenomModeEnabled() ? "builtin-venom" : "builtin-jarvis")
+    );
   };
 
   useEffect(() => {
@@ -211,8 +215,12 @@ const VoiceStudio = () => {
           >
             <div className="flex-1">
               <div className="text-sm">{p.name}</div>
+              {p.description && (
+                <div className="text-[10px] text-cyan-300/70">{p.description}</div>
+              )}
               <div className="text-[10px] text-cyan-400/60">
                 pitch {p.pitch.toFixed(2)} · rate {p.rate.toFixed(2)}
+                {p.builtIn ? " · built-in" : ""}
               </div>
             </div>
             {p.sample && <audio controls src={p.sample} className="h-7 w-32" />}
@@ -223,13 +231,15 @@ const VoiceStudio = () => {
             >
               <Check className="w-4 h-4" />
             </Button>
-            <Button
-              size="icon" variant="ghost"
-              onClick={() => { deleteVoiceProfile(p.id); refresh(); }}
-              className="text-red-300"
-            >
-              <Trash2 className="w-4 h-4" />
-            </Button>
+            {!p.builtIn && (
+              <Button
+                size="icon" variant="ghost"
+                onClick={() => { deleteVoiceProfile(p.id); refresh(); }}
+                className="text-red-300"
+              >
+                <Trash2 className="w-4 h-4" />
+              </Button>
+            )}
           </div>
         ))}
       </div>
