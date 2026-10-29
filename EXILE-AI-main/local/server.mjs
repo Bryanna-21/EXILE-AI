@@ -42,6 +42,7 @@ import {
   updateWhatsAppConversationAIConfig,
 } from "./whatsapp-conversation.mjs";
 import { arcSystemCore } from "./arc-system-core.mjs";
+import { arcConnectivity } from "./arc-connectivity.mjs";
 import { arcAutonomyEngine } from "./arc-autonomy-engine.mjs";
 import { listEligibleProcesses, terminateSelectedProcess } from "./arc-process-manager.mjs";
 
@@ -894,6 +895,33 @@ const server = http.createServer(async (req, res) => {
         return json(res, 200, { ok: true, processes });
       } catch {
         return json(res, 503, { ok: false, error: "Process inventory is unavailable." });
+      }
+    }
+
+    if (url.pathname === "/arc/connectivity") {
+      if (req.method !== "GET") {
+        res.setHeader("Allow", "GET");
+        return json(res, 405, { ok: false, error: "Method not allowed." });
+      }
+
+      res.setHeader("Cache-Control", "no-store");
+
+      try {
+        const snapshot = await arcConnectivity.collectConnectivitySnapshot({
+          dataDir: ARC_CONFIG_DIR,
+        });
+        return json(res, 200, {
+          ok: true,
+          mode: "read-only",
+          snapshot,
+        });
+      } catch (error) {
+        console.error("[arc] connectivity collection failed:", error.message);
+        return json(res, 503, {
+          ok: false,
+          mode: "read-only",
+          error: "ARC connectivity data is temporarily unavailable.",
+        });
       }
     }
 
