@@ -655,13 +655,19 @@ const Index = () => {
       />
 
       {/* top bar */}
-      <header className="relative z-10 flex items-center justify-between px-5 pt-5">
-        <div className="text-[10px] tracking-[0.4em] text-cyan-400/70 space-y-1">
-          <div className="flex items-center gap-1.5">
+      <header className="relative z-10 flex flex-wrap items-center justify-between gap-3 px-5 pt-4 sm:px-6 sm:pt-5">
+        <div className="flex items-center gap-4">
+          <div className="hidden sm:flex h-10 w-10 items-center justify-center rounded-xl border border-cyan-400/40 bg-cyan-400/10 text-lg font-black text-cyan-200 shadow-[0_0_22px_rgba(34,211,238,0.18)]">E</div>
+          <div>
+            <div className="mb-1 text-xs font-semibold tracking-[0.32em] text-slate-100">EXILE <span className="text-cyan-300">AI</span></div>
+            <div className="text-[10px] tracking-[0.4em] text-cyan-400/70 space-y-1">
+              <div className="flex items-center gap-1.5">
             {online ? <Wifi className="w-3 h-3" /> : <WifiOff className="w-3 h-3 text-amber-400" />}
             <span>{online ? 'DATA LINK ACTIVE' : 'LOCAL MODE'}</span>
           </div>
-          <div className="font-mono text-cyan-400/50">{time.toLocaleTimeString()}</div>
+              <div className="font-mono text-cyan-400/50">{time.toLocaleTimeString()}</div>
+            </div>
+          </div>
         </div>
         <div className="flex items-center gap-2">
           <ActivityCenter />
@@ -713,6 +719,63 @@ const Index = () => {
         </div>
       </header>
 
+      {/* X-UI primary navigation */}
+      <aside className="fixed left-3 top-24 bottom-5 z-20 hidden w-56 flex-col rounded-2xl border border-cyan-500/20 bg-slate-950/85 p-3 shadow-2xl backdrop-blur-xl lg:flex">
+        <div className="mb-3 px-3 pt-2 text-[9px] font-semibold tracking-[0.3em] text-cyan-500/60">COMMAND NAVIGATION</div>
+        <button onClick={() => setPanel(null)} className={`mb-1 flex items-center gap-3 rounded-xl px-3 py-3 text-left text-sm transition ${panel === null ? 'border border-cyan-400/30 bg-cyan-400/10 text-cyan-100' : 'text-slate-400 hover:bg-white/5 hover:text-cyan-100'}`}>
+          <Home className="h-4 w-4" /><span>Home</span>
+        </button>
+        <button onClick={() => setPanel('transcript')} className={`mb-1 flex items-center gap-3 rounded-xl px-3 py-3 text-left text-sm transition ${panel === 'transcript' ? 'bg-cyan-400/10 text-cyan-100' : 'text-slate-400 hover:bg-white/5 hover:text-cyan-100'}`}>
+          <MessageCircle className="h-4 w-4" /><span>Conversations</span>
+        </button>
+        <div className="my-3 border-t border-cyan-500/15" />
+        <div className="mb-2 px-3 text-[9px] tracking-[0.25em] text-cyan-500/60">WORKSPACES</div>
+        <div className="min-h-0 flex-1 space-y-1 overflow-y-auto">
+          {menuItems.filter((item) => !['api', 'transcript'].includes(item.id)).map((item) => {
+            const ItemIcon = item.icon;
+            return (
+              <button key={item.id} onClick={() => setPanel(item.id)} className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-xs text-slate-400 transition hover:bg-cyan-400/10 hover:text-cyan-100">
+                <ItemIcon className="h-4 w-4 text-cyan-400/80" /><span>{item.label}</span>
+              </button>
+            );
+          })}
+        </div>
+        <button onClick={() => setSettingsOpen(true)} className="mt-3 flex items-center gap-3 rounded-xl border border-cyan-500/20 px-3 py-3 text-xs text-cyan-200 hover:bg-cyan-400/10">
+          <Settings className="h-4 w-4" /> Settings
+        </button>
+        <div className="mt-3 rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-3">
+          <div className="flex items-center gap-2 text-[9px] tracking-widest text-emerald-300"><span className="h-1.5 w-1.5 rounded-full bg-emerald-400" /> SYSTEM READY</div>
+          <div className="mt-1 text-[10px] text-slate-500">Exile local workspace</div>
+        </div>
+      </aside>
+
+      {/* JARVIS companion and live system context */}
+      <aside className="fixed right-3 top-24 bottom-5 z-20 hidden w-64 min-h-0 flex-col gap-3 overflow-y-auto rounded-2xl border border-cyan-500/20 bg-slate-950/85 p-4 shadow-2xl backdrop-blur-xl xl:flex">
+        <div className="flex items-center justify-between">
+          <span className="text-[9px] font-semibold tracking-[0.3em] text-cyan-400">JARVIS COMPANION</span>
+          <span className="h-2 w-2 rounded-full bg-emerald-400 shadow-[0_0_10px_rgba(52,211,153,0.8)]" />
+        </div>
+        <div className="flex flex-col items-center rounded-xl border border-cyan-500/15 bg-gradient-to-b from-cyan-500/10 to-transparent px-3 py-6">
+          <div className="flex h-20 w-20 items-center justify-center rounded-full border border-cyan-300/40 bg-cyan-400/5 shadow-[0_0_35px_rgba(34,211,238,0.16)]">
+            <ArcReactor size={68} state={state} amplitude={level} />
+          </div>
+          <div className="mt-4 text-sm font-semibold tracking-[0.2em] text-slate-100">JARVIS</div>
+          <div className="mt-1 text-[9px] tracking-widest text-cyan-400/70">PERSONAL AI COMPANION</div>
+        </div>
+        <div className="space-y-3 rounded-xl border border-white/5 bg-white/[0.03] p-3">
+          <div className="flex items-center justify-between text-xs"><span className="text-slate-500">Assistant</span><span className="text-emerald-300">{state.toUpperCase()}</span></div>
+          <div className="flex items-center justify-between text-xs"><span className="text-slate-500">Connection</span><span className={online ? 'text-emerald-300' : 'text-amber-300'}>{online ? 'ONLINE' : 'LOCAL'}</span></div>
+          <div className="flex items-center justify-between text-xs"><span className="text-slate-500">Reasoning</span><span className="text-cyan-200">{tier.toUpperCase()}</span></div>
+          <div className="flex items-center justify-between text-xs"><span className="text-slate-500">Voice</span><span className="text-cyan-200">{muted ? 'MUTED' : 'ENABLED'}</span></div>
+        </div>
+        <div className="mt-auto space-y-2">
+          <div className="px-1 text-[9px] tracking-[0.25em] text-cyan-500/60">QUICK ACTIONS</div>
+          <button onClick={startNewChat} className="flex w-full items-center gap-2 rounded-lg border border-cyan-500/20 px-3 py-2.5 text-left text-xs text-cyan-100 hover:bg-cyan-500/10"><FilePlus2 className="h-4 w-4" /> New conversation</button>
+          <button onClick={listen} className="flex w-full items-center gap-2 rounded-lg border border-cyan-500/20 px-3 py-2.5 text-left text-xs text-cyan-100 hover:bg-cyan-500/10"><Mic className="h-4 w-4" /> Voice command</button>
+          <button onClick={() => setPanel('dashboard')} className="flex w-full items-center gap-2 rounded-lg border border-cyan-500/20 px-3 py-2.5 text-left text-xs text-cyan-100 hover:bg-cyan-500/10"><Activity className="h-4 w-4" /> System monitor</button>
+        </div>
+      </aside>
+
       {/* docking arc reactor */}
       <button
         onClick={listen}
@@ -724,10 +787,40 @@ const Index = () => {
       </button>
 
       {/* core — persistent conversation feed */}
-      <main className="relative flex-1 flex flex-col items-center justify-end gap-4 px-6 pb-4">
+      <main
+        className="relative mx-auto my-4 flex w-full max-w-[1800px] flex-1 flex-col items-center justify-end gap-4 overflow-hidden rounded-2xl border border-cyan-500/15 px-6 pb-4 pt-6 lg:ml-64 lg:w-[calc(100%-17rem)] xl:mr-72 xl:w-[calc(100%-34rem)]"
+        style={{ backgroundImage: "linear-gradient(rgba(2,6,23,0.78), rgba(2,6,23,0.92)), url('/exile-chat-background.jpg')", backgroundSize: 'cover', backgroundPosition: 'center' }}
+      >
+        {turns.length === 0 && (
+          <section className="relative z-10 mx-auto mb-4 w-full max-w-4xl">
+            <div className="mb-2 text-center text-[9px] font-semibold tracking-[0.45em] text-cyan-300/70">EXILE INTELLIGENCE SYSTEM</div>
+            <h1 className="text-center text-3xl font-semibold tracking-[0.16em] text-white sm:text-4xl">YOUR COMMAND CENTER</h1>
+            <p className="mt-3 text-center text-xs tracking-wide text-slate-300/70">One workspace. Your tools, your data, your control.</p>
+            <div className="mt-7 grid grid-cols-2 gap-3 md:grid-cols-3">
+              {[
+                { id: 'transcript', title: 'Conversations', detail: 'Review and continue chats', icon: MessageCircle },
+                { id: 'research', title: 'Research', detail: 'Explore and analyse information', icon: Search },
+                { id: 'cinema', title: 'Creative Studio', detail: 'Build visual storyboards', icon: Film },
+                { id: 'files', title: 'File Vault', detail: 'Access your stored files', icon: Files },
+                { id: 'dashboard', title: 'System Monitor', detail: 'Inspect system activity', icon: Activity },
+                { id: 'api', title: 'Integrations', detail: 'Manage provider connections', icon: Grid3x3 },
+              ].map((action) => {
+                const ActionIcon = action.icon;
+                return (
+                  <button key={action.id} onClick={() => setPanel(action.id)} className="group min-h-28 rounded-xl border border-cyan-400/20 bg-slate-950/65 p-4 text-left backdrop-blur-sm transition hover:-translate-y-0.5 hover:border-cyan-300/50 hover:bg-cyan-500/10">
+                    <ActionIcon className="mb-3 h-5 w-5 text-cyan-300 transition group-hover:text-white" />
+                    <div className="text-sm font-semibold text-slate-100">{action.title}</div>
+                    <div className="mt-1 text-[10px] leading-4 text-slate-400">{action.detail}</div>
+                  </button>
+                );
+              })}
+            </div>
+            <div className="mt-5 text-center text-[9px] tracking-[0.3em] text-cyan-300/60">SYSTEM STATUS · {online ? 'CONNECTED' : 'LOCAL MODE'} · {time.toLocaleDateString()}</div>
+          </section>
+        )}
         <div
           ref={feedRef}
-          className="w-full max-w-3xl max-h-[58vh] min-h-[7rem] overflow-y-auto px-2 space-y-5"
+          className="w-full max-w-4xl max-h-[58vh] min-h-[7rem] overflow-y-auto px-2 space-y-5"
         >
           {turns.length === 0 ? (
             <p className="text-center text-[10px] tracking-[0.4em] text-cyan-400/50">
@@ -832,7 +925,7 @@ const Index = () => {
 
 
       {/* type bar */}
-      <footer className="relative px-5 pb-7">
+      <footer className="relative z-10 mx-auto w-full max-w-[1800px] px-5 pb-7 lg:ml-64 lg:w-[calc(100%-17rem)] xl:mr-72 xl:w-[calc(100%-34rem)]">
         {attachments.length > 0 && (
           <div className="mx-auto mb-2 flex max-w-xl flex-wrap gap-2" aria-label="Attached files">
             {attachments.map((item) => (
@@ -849,7 +942,7 @@ const Index = () => {
         {attachmentError && <p role="status" className="mx-auto mb-2 max-w-xl text-xs text-amber-300">{attachmentError}</p>}
         <form
           onSubmit={(e) => { e.preventDefault(); void ask(input, undefined, attachments); }}
-          className="mx-auto max-w-xl flex items-center gap-2 rounded-full border border-cyan-500/35 bg-slate-900/70 backdrop-blur px-4 py-2 shadow-[0_0_30px_rgba(34,211,238,0.15)]"
+          className="mx-auto max-w-4xl flex items-center gap-3 rounded-2xl border border-cyan-500/35 bg-slate-950/80 px-5 py-3 shadow-[0_0_30px_rgba(34,211,238,0.15)] backdrop-blur-xl"
         >
           <input ref={fileInputRef} type="file" multiple className="hidden" accept="image/png,image/jpeg,image/webp,application/pdf,text/plain,application/json,.txt,.md,.markdown,.csv,.json,.log,.xml,.yaml,.yml,.toml,.js,.jsx,.ts,.tsx,.py,.html,.css,.sql,.java,.c,.h,.cpp,.hpp,.rs,.go,.sh" onChange={(event) => void handleFiles(event.target.files)} />
           <button type="button" onClick={() => fileInputRef.current?.click()} disabled={attachments.length >= MAX_ATTACHMENTS} className="text-[#e0c478] hover:text-[#f5edda] disabled:opacity-40" aria-label="Attach files" title="Attach files">
