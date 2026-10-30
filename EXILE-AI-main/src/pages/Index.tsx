@@ -124,11 +124,11 @@ function renderExileMessage(text: string): ReactNode[] {
 
     if (start > cursor) {
       nodes.push(
-        <span key={`text-${index++}`} className="whitespace-pre-wrap">
-          {text.slice(cursor, start)}
-        </span>,
-      );
-    }
+          <span key={`text-${index++}`} className="whitespace-pre-wrap">
+            {text.slice(cursor, start)}
+          </span>
+        );
+      }
 
     const code = match[2].replace(/\r?\n$/, "");
     if (code.trim()) {
@@ -326,8 +326,7 @@ const Index = () => {
     setMuted(next);
 
     try {
-      localStorage.setItem('exile.console.muted', String(next));
-    } catch {
+      localStorage.setItem('exile.console.muted', String(next));} catch {
       // The mute button still works for this session if storage is unavailable.
     }
 
@@ -593,8 +592,9 @@ const Index = () => {
     rec.onend = () => {
       if (meterRef.current) stopMeter();
       stopClip();
-      setState((s) => (s === 'listening' ? 'idle' : s));
-    };
+        setState((s) => (s === 'listening' ? 'idle' : s));
+
+  };
     recRef.current = rec;
     setState('listening');
     try {
@@ -1029,6 +1029,8 @@ const Index = () => {
       )}
     </div>
   );
-};
+
+
+}
 
 export default Index;
