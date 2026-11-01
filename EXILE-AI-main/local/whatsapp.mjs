@@ -1,5 +1,6 @@
 import makeWASocket, {
   DisconnectReason,
+  downloadContentFromMessage,
   fetchLatestBaileysVersion,
   useMultiFileAuthState,
 } from "@whiskeysockets/baileys";
@@ -7,8 +8,12 @@ import QRCode from "qrcode";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
 import { handleWhatsAppIncoming } from "./whatsapp-automation.mjs";
-import { handleWhatsAppConversationIncoming } from "./whatsapp-conversation.mjs";
+import {
+  handleWhatsAppConversationIncoming,
+  getWhatsAppConversationAIConfig,
+} from "./whatsapp-conversation.mjs";
 
 const AUTH_DIR =
   process.env.EXILE_WHATSAPP_AUTH_DIR ||
@@ -201,6 +206,135 @@ function messageText(message) {
   return type ? `[${type.replace("Message", "")}]` : "";
 }
 
+
+async function collectWhatsAppMedia(stream, maxBytes) {
+  const chunks = [];
+  let total = 0;
+
+  for await (const chunk of stream) {
+    const buffer = Buffer.from(chunk);
+    total += buffer.length;
+    if (total > maxBytes) {
+      throw new Error("WhatsApp attachment exceeds the processing size limit.");
+    }
+    chunks.push(buffer);
+  }
+
+  if (!total) throw new Error("WhatsApp attachment was empty.");
+  return Buffer.concat(chunks, total);
+}
+
+export async function downloadWhatsAppIncomingMedia(msg) {
+  const content = unwrapMessage(msg?.message);
+
+  if (content.imageMessage) {
+    const image = content.imageMessage;
+    const mimeType = String(image.mimetype || "image/jpeg").toLowerCase();
+
+    if (!["image/jpeg", "image/png", "image/webp"].includes(mimeType)) {
+      throw new Error("Unsupported image format.");
+    }
+
+    const buffer = await collectWhatsAppMedia(
+      await downloadContentFromMessage(image, "image"),
+      8 * 1024 * 1024,
+    );
+
+    return {
+      type: "image",
+      mimeType,
+      data: buffer.toString("base64"),
+    };
+  }
+
+  if (content.videoMessage) {
+    const video = content.videoMessage;
+    const mimeType = String(video.mimetype || "video/mp4").toLowerCase();
+
+    if (!["video/mp4", "video/3gpp", "video/quicktime"].includes(mimeType)) {
+      throw new Error("Unsupported video format.");
+    }
+
+    const buffer = await collectWhatsAppMedia(
+      await downloadContentFromMessage(video, "video"),
+      15 * 1024 * 1024,
+    );
+
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exile-wa-vision-"));
+
+    try {
+      const extension = mimeType === "video/3gpp" ? "3gp"
+        : mimeType === "video/quicktime" ? "mov" : "mp4";
+      const inputPath = path.join(tempDir, `incoming.${extension}`);
+      fs.writeFileSync(inputPath, buffer, { flag: "wx" });
+
+      const probe = spawnSync("ffprobe", [
+        "-v", "error",
+        "-show_entries", "format=duration",
+        "-of", "default=noprint_wrappers=1:nokey=1",
+        inputPath,
+      ], {
+        encoding: "utf8",
+        timeout: 10000,
+        windowsHide: true,
+      });
+
+      const duration = Number(String(probe.stdout || "").trim());
+
+      if (probe.error || probe.status !== 0 || !Number.isFinite(duration) || duration <= 0) {
+        throw new Error("Could not read the video duration.");
+      }
+      if (duration > 60) {
+        throw new Error("Videos longer than 60 seconds are not supported for WhatsApp analysis.");
+      }
+
+      const frames = [];
+      const ratios = [0.05, 0.33, 0.66, 0.90];
+
+      for (const ratio of ratios) {
+        const seconds = Math.max(0, Math.min(duration - 0.01, duration * ratio));
+        const frame = spawnSync("ffmpeg", [
+          "-hide_banner", "-loglevel", "error",
+          "-ss", seconds.toFixed(3),
+          "-i", inputPath,
+          "-frames:v", "1",
+          "-vf", "scale=640:-2",
+          "-q:v", "6",
+          "-f", "image2pipe",
+          "-vcodec", "mjpeg",
+          "pipe:1",
+        ], {
+          encoding: "buffer",
+          maxBuffer: 2 * 1024 * 1024,
+          timeout: 15000,
+          windowsHide: true,
+        });
+
+        if (!frame.error && frame.status === 0 && frame.stdout?.length) {
+          frames.push({
+            mimeType: "image/jpeg",
+            data: frame.stdout.toString("base64"),
+          });
+        }
+      }
+
+      if (!frames.length) {
+        throw new Error("Could not extract readable frames from the video.");
+      }
+
+      return {
+        type: "video",
+        durationSeconds: Math.round(duration),
+        frames,
+      };
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  }
+
+  return null;
+}
+
 function rememberMessage(item) {
   if (!item.text) return;
   const existingIndex = messages.findIndex(
@@ -367,16 +501,26 @@ export async function connectWhatsApp() {
         };
         rememberMessage(item);
 
-        // Conversational AI is separate from away-mode automation and supports groups.
+        // Download media only when Conversational AI is enabled.
+        const rawMessage = unwrapMessage(msg.message);
+        const mediaKind = rawMessage.imageMessage ? "image"
+          : rawMessage.videoMessage ? "video" : "";
+
         if (
           type === "notify" &&
           !item.fromMe &&
           item.text &&
-          !/^\[[^\]]+\]$/.test(item.text) &&
-          msg.key?.id
+          msg.key?.id &&
+          (mediaKind || !/^\[[^\]]+\]$/.test(item.text)) &&
+          (!mediaKind || getWhatsAppConversationAIConfig().enabled)
         ) {
-          void handleWhatsAppConversationIncoming(item).catch((error) => {
-            console.error("[WhatsApp conversation AI] Handler failed:", error.message);
+          void (async () => {
+            const media = mediaKind
+              ? await downloadWhatsAppIncomingMedia(msg)
+              : null;
+            await handleWhatsAppConversationIncoming({ ...item, media });
+          })().catch((error) => {
+            console.error("[WhatsApp conversation AI] Incoming processing failed:", error.message);
           });
         }
 
@@ -384,6 +528,7 @@ export async function connectWhatsApp() {
         if (
           type === "notify" &&
           !item.fromMe &&
+          !mediaKind &&
           jid.endsWith("@s.whatsapp.net") &&
           item.text &&
           !/^\[[^\]]+\]$/.test(item.text) &&

@@ -1,7 +1,7 @@
 {
-  "name": "vite_react_shadcn_ts",
+  "name": "exile-ai",
   "private": true,
-  "version": "0.0.0",
+  "version": "1.0.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -10,7 +10,8 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "electron": "npm run build && electron .",
-    "package:win": "vite build && electron-packager . EXILE --platform=win32 --arch=x64 --out=electron-release --overwrite"
+    "package:win": "npm run build && npm run icons && electron-builder --win nsis",
+    "icons": "node scripts/build-icons.cjs"
   },
   "dependencies": {
     "@codemirror/lang-cpp": "^6.0.3",
@@ -63,6 +64,7 @@
     "cmdk": "^1.0.0",
     "date-fns": "^3.6.0",
     "docx": "^9.10.0",
+    "electron-updater": "^6.8.11",
     "embla-carousel-react": "^8.3.0",
     "input-otp": "^1.2.4",
     "lucide-react": "^0.462.0",
@@ -94,16 +96,51 @@
     "@vitejs/plugin-react-swc": "^3.5.0",
     "autoprefixer": "^10.4.20",
     "electron": "^43.3.0",
+    "electron-builder": "^26.18.0",
     "eslint": "^9.9.0",
     "eslint-plugin-react-hooks": "^5.1.0-rc.0",
     "eslint-plugin-react-refresh": "^0.4.9",
     "globals": "^15.9.0",
     "lovable-tagger": "^1.1.7",
     "postcss": "^8.4.47",
+    "sharp": "^0.35.5",
     "tailwindcss": "^3.4.11",
     "typescript": "^5.5.3",
     "typescript-eslint": "^8.0.1",
     "vite": "^5.4.1"
   },
-  "main": "electron/main.cjs"
+  "main": "electron/main.cjs",
+  "productName": "EXILE AI",
+  "description": "EXILE AI desktop application",
+  "build": {
+    "appId": "com.exile.ai",
+    "productName": "EXILE AI",
+    "directories": {
+      "buildResources": "assets",
+      "output": "electron-release-optimized"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "local/**/*",
+      "package.json"
+    ],
+    "extraMetadata": {
+      "main": "electron/main.cjs"
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "icon": "assets/exile-reactor.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "EXILE AI"
+    },
+    "asar": true
+  }
 }

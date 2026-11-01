@@ -14,6 +14,33 @@ export interface VoiceProfile {
   pitch: number;
   rate: number;
   createdAt: number;
+  builtIn?: boolean;
+  description?: string;
+}
+
+export const BUILT_IN_PROFILES: VoiceProfile[] = [
+  {
+    id: "builtin-venom",
+    name: "VENOM",
+    pitch: 0.78,
+    rate: 0.9,
+    createdAt: 0,
+    builtIn: true,
+    description: "Deep, deliberate, assertive and concise.",
+  },
+  {
+    id: "builtin-jarvis",
+    name: "JARVIS",
+    pitch: 1,
+    rate: 0.96,
+    createdAt: 0,
+    builtIn: true,
+    description: "Calm, polished, precise; prefers British English.",
+  },
+];
+
+export function getBuiltInVoiceProfiles(): VoiceProfile[] {
+  return BUILT_IN_PROFILES;
 }
 
 const KEY = "exile.voice.profiles";
@@ -49,7 +76,15 @@ export function getActiveVoiceId(): string | null {
 
 export function getActiveVoice(): VoiceProfile | null {
   const id = getActiveVoiceId();
-  return listVoiceProfiles().find((p) => p.id === id) || null;
+  const selectedBuiltIn = BUILT_IN_PROFILES.find((p) => p.id === id);
+  if (selectedBuiltIn) return selectedBuiltIn;
+
+  const selectedCustom = listVoiceProfiles().find((p) => p.id === id);
+  if (selectedCustom) return selectedCustom;
+
+  return BUILT_IN_PROFILES.find(
+    (p) => p.id === (isVenomModeEnabled() ? "builtin-venom" : "builtin-jarvis")
+  ) ?? null;
 }
 
 /** Speak with the active profile, or use the desktop Venom-inspired audio path. */
@@ -145,19 +180,37 @@ export function speakWithProfile(text: string, onEnd?: () => void) {
     if (requestId !== speechRequestId) return;
 
     const u = new SpeechSynthesisUtterance(text);
-    u.lang = "en-GB";
-    u.pitch = venomMode
-      ? Math.min(profile?.pitch ?? 0.72, 0.8)
-      : (profile?.pitch ?? 1);
-    u.rate = venomMode
-      ? Math.min(profile?.rate ?? 0.88, 0.92)
-      : (profile?.rate ?? 1);
+    const isJarvis = profile?.id === "builtin-jarvis";
+    const isVenom = profile
+      ? profile.id === "builtin-venom"
+      : venomMode;
 
+    // JARVIS uses the confirmed male Microsoft David voice on Windows.
+    // Never silently substitute a female voice when that voice is unavailable.
+    u.lang = isJarvis ? "en-US" : "en-GB";
+    u.pitch = isVenom
+      ? Math.min(profile?.pitch ?? 0.78, 0.82)
+      : (profile?.pitch ?? 1);
+    u.rate = isVenom
+      ? Math.min(profile?.rate ?? 0.9, 0.94)
+      : (profile?.rate ?? 0.96);
+
+    const availableVoices = speechSynthesis.getVoices();
     if (profile?.voiceURI) {
-      const match = speechSynthesis.getVoices().find(
-        (v) => v.voiceURI === profile.voiceURI,
-      );
+      const match = availableVoices.find((v) => v.voiceURI === profile.voiceURI);
       if (match) u.voice = match;
+    } else {
+      const englishVoices = availableVoices.filter(
+        (v) => /^en(-|_)/i.test(v.lang),
+      );
+      const preferred = isJarvis
+        ? englishVoices.find((v) => /microsoft david/i.test(v.name))
+          ?? englishVoices.find((v) => /male|david|mark|george|daniel|james/i.test(v.name))
+        : isVenom
+          ? englishVoices.find((v) => /male|david|mark|george|daniel|james/i.test(v.name))
+          : englishVoices.find((v) => /en-GB/i.test(v.lang) && /male|daniel|george|james/i.test(v.name))
+            ?? englishVoices.find((v) => /en-GB/i.test(v.lang));
+      if (preferred) u.voice = preferred;
     }
 
     let completed = false;
@@ -175,12 +228,16 @@ export function speakWithProfile(text: string, onEnd?: () => void) {
 
   speechSynthesis.cancel();
 
-  if (!venomMode || !window.exileDesktop?.synthesizeVenom) {
+  const useDesktopVoice = Boolean(window.exileDesktop?.synthesizeVenom) &&
+    (Boolean(profile?.builtIn) || venomMode);
+
+  if (!useDesktopVoice) {
     fallbackToBrowserSpeech();
     return;
   }
 
-  void window.exileDesktop.synthesizeVenom(text).then(async (audioData) => {
+  const desktopProfile = profile?.id === "builtin-jarvis" ? "jarvis" : "venom";
+  void window.exileDesktop.synthesizeVenom(text, desktopProfile).then(async (audioData) => {
     if (requestId !== speechRequestId) return;
 
     if (audioData) {

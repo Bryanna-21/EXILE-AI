@@ -116,7 +116,114 @@
 }
 
 /* Installed-app safe areas (notches, home indicator) */
+html, body, #root {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  margin: 0;
+  overflow: hidden;
+}
+
 body {
-  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
-  overscroll-behavior-y: none;
+  padding: 0;
+  overscroll-behavior: none;
+}
+
+      body {
+        background-color: #030712;
+        color: #e2e8f0;
+      }
+
+
+/* EXILE CINEMATIC MOTION SYSTEM */
+:root {
+  --exile-motion-fast: 160ms;
+  --exile-motion-normal: 240ms;
+  --exile-motion-panel: 320ms;
+  --exile-motion-ease: cubic-bezier(0.2, 0.75, 0.25, 1);
+  --exile-motion-emphasis: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes exile-message-enter {
+  from { opacity: 0; transform: translate3d(0, 9px, 0); }
+  to { opacity: 1; transform: translate3d(0, 0, 0); }
+}
+
+@keyframes exile-panel-enter {
+  from { opacity: 0; transform: translate3d(0, 12px, 0) scale(0.99); }
+  to { opacity: 1; transform: translate3d(0, 0, 0) scale(1); }
+}
+
+@keyframes exile-core-idle {
+  0%, 100% { filter: drop-shadow(0 0 5px rgba(56,189,248,0.18)); }
+  50% { filter: drop-shadow(0 0 12px rgba(56,189,248,0.34)); }
+}
+
+@keyframes exile-core-thinking {
+  0%, 100% { filter: drop-shadow(0 0 7px rgba(56,189,248,0.25)); }
+  50% { filter: drop-shadow(0 0 17px rgba(56,189,248,0.52)); }
+}
+
+.exile-message-enter {
+  animation: exile-message-enter 260ms var(--exile-motion-emphasis) both;
+}
+
+.exile-panel-enter {
+  animation: exile-panel-enter var(--exile-motion-panel) var(--exile-motion-emphasis) both;
+}
+
+.exile-control {
+  transition:
+    color var(--exile-motion-fast) ease,
+    background-color var(--exile-motion-fast) ease,
+    border-color var(--exile-motion-fast) ease,
+    box-shadow var(--exile-motion-normal) ease,
+    transform var(--exile-motion-fast) var(--exile-motion-ease);
+}
+
+.exile-control:hover {
+  transform: translateY(-1px);
+}
+
+.exile-control:active {
+  transform: translateY(0) scale(0.985);
+}
+
+.exile-control:focus-visible {
+  outline: 2px solid rgba(103, 232, 249, 0.8);
+  outline-offset: 3px;
+}
+
+.exile-reactor[data-state="idle"] svg {
+  animation: exile-core-idle 3.2s ease-in-out infinite;
+}
+
+.exile-reactor[data-state="thinking"] svg {
+  animation: exile-core-thinking 1.8s ease-in-out infinite;
+}
+
+.exile-reactor[data-state="listening"] svg,
+.exile-reactor[data-state="speaking"] svg {
+  filter: drop-shadow(0 0 13px rgba(56,189,248,0.42));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+
+  .exile-control:hover,
+  .exile-control:active {
+    transform: none;
+  }
+
+  .exile-message-enter,
+  .exile-panel-enter {
+    animation: none;
+  }
 }

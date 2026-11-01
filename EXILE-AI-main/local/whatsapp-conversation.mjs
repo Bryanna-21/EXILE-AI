@@ -11,6 +11,7 @@ let state = { enabled: false, contacts: {} };
 let generationEpoch = 0;
 let generateReply = null;
 let sendMessage = null;
+let sendMedia = null;
 const queues = new Map();
 const inFlightMessages = new Set();
 
@@ -72,9 +73,10 @@ function isQuestionForGroup(text) {
     || text.includes("?");
 }
 
-export function configureWhatsAppConversationAI({ generate, send }) {
+export function configureWhatsAppConversationAI({ generate, send, sendMedia: sendAttachment }) {
   generateReply = typeof generate === "function" ? generate : null;
   sendMessage = typeof send === "function" ? send : null;
+  sendMedia = typeof sendAttachment === "function" ? sendAttachment : null;
 }
 
 export function getWhatsAppConversationAIConfig() {
@@ -91,13 +93,13 @@ export function updateWhatsAppConversationAIConfig(input) {
   return getWhatsAppConversationAIConfig();
 }
 
-async function processIncoming(item, jid, text, eventEpoch) {
+async function processIncoming(item, jid, text, eventEpoch, media) {
   if (!state.enabled || eventEpoch !== generationEpoch) {
     return { skipped: true, reason: "disabled-or-cancelled" };
   }
 
   const group = jid.endsWith("@g.us");
-  if (group && !isQuestionForGroup(text)) {
+  if (group && !media && !isQuestionForGroup(text)) {
     return { skipped: true, reason: "not-a-group-question" };
   }
 
@@ -133,33 +135,85 @@ async function processIncoming(item, jid, text, eventEpoch) {
       incomingText: text.slice(0, 4000),
       history: contact.history.map(({ role, content }) => ({ role, content })),
       isGroup: group,
+      media,
     });
   } catch (error) {
     console.error("[WhatsApp conversation AI] Generation failed:", error.message);
-    return { sent: false, reason: "generation-failed" };
+
+    // Do not send a fallback if the feature was disabled during generation.
+    if (eventEpoch !== generationEpoch || !state.enabled) {
+      return { skipped: true, reason: "disabled-before-fallback" };
+    }
+
+    const fallbackText = media
+      ? `I received your ${media.type}, but I cannot analyze it right now. Please try again shortly.`
+      : "I received your message, but my AI service is temporarily unavailable. Please try again shortly."; 
+
+    try {
+      await sendMessage(jid, fallbackText);
+      contact.history.push({
+        role: "assistant",
+        content: fallbackText,
+        at: Date.now(),
+      });
+      contact.history = contact.history.slice(-MAX_HISTORY);
+      contact.updatedAt = Date.now();
+      persist();
+      console.info("[WhatsApp conversation AI] Availability fallback sent.");
+      return { sent: true, fallback: true };
+    } catch (sendError) {
+      console.error("[WhatsApp conversation AI] Fallback send failed:", sendError.message);
+      return { sent: false, reason: "generation-failed" };
+    }
   }
+
+  const attachmentReply =
+    reply && typeof reply === "object" && reply.attachment &&
+    typeof reply.attachment.dataUrl === "string" &&
+    typeof reply.attachment.filename === "string";
+
+  const replyText = typeof reply === "string"
+    ? reply.trim().slice(0, 4000)
+    : typeof reply?.text === "string"
+      ? reply.text.trim().slice(0, 1000)
+      : "";
 
   if (
     eventEpoch !== generationEpoch ||
     !state.enabled ||
-    typeof reply !== "string" ||
-    !reply.trim()
+    !replyText ||
+    (attachmentReply && typeof sendMedia !== "function") ||
+    (!attachmentReply && typeof reply !== "string")
   ) {
     return { skipped: true, reason: "disabled-before-send" };
   }
 
   try {
-    await sendMessage(jid, reply.trim().slice(0, 4000));
+    if (attachmentReply) {
+      await sendMedia(
+        jid,
+        reply.attachment.dataUrl,
+        reply.attachment.filename,
+        String(reply.attachment.caption || replyText).slice(0, 4000),
+      );
+    } else {
+      await sendMessage(jid, replyText);
+    }
+
     contact.history.push({
       role: "assistant",
-      content: reply.trim().slice(0, 4000),
+      content: attachmentReply
+        ? `${replyText}\n[File sent: ${reply.attachment.filename}]`
+        : replyText,
       at: Date.now(),
     });
     contact.history = contact.history.slice(-MAX_HISTORY);
     contact.updatedAt = Date.now();
     persist();
-    console.info("[WhatsApp conversation AI] Reply sent.");
-    return { sent: true };
+    console.info(attachmentReply
+      ? "[WhatsApp conversation AI] File sent."
+      : "[WhatsApp conversation AI] Reply sent.");
+    return { sent: true, attachment: attachmentReply ? reply.attachment.filename : undefined };
   } catch (error) {
     console.error("[WhatsApp conversation AI] WhatsApp send failed:", error.message);
     return { sent: false, reason: "send-failed" };
@@ -169,9 +223,23 @@ async function processIncoming(item, jid, text, eventEpoch) {
 export async function handleWhatsAppConversationIncoming(item) {
   const jid = String(item?.jid || "");
   const id = String(item?.id || "");
-  const text = String(item?.text || "").trim();
+  const media = item?.media &&
+    ["image", "video"].includes(item.media.type) ? item.media : null;
+  let text = String(item?.text || "").trim();
 
-  if (!state.enabled || !id || !validJid(jid) || !text || /^\[[^\]]+\]$/.test(text)) {
+  if (media && /^\[(image|video)\]$/i.test(text)) {
+    text = media.type === "image"
+      ? "Please analyze this image."
+      : "Please analyze this video.";
+  }
+
+  if (
+    !state.enabled ||
+    !id ||
+    !validJid(jid) ||
+    (!text && !media) ||
+    (!media && /^\[[^\]]+\]$/.test(text))
+  ) {
     return { skipped: true };
   }
 
@@ -185,7 +253,7 @@ export async function handleWhatsAppConversationIncoming(item) {
   const previous = queues.get(jid) || Promise.resolve();
   const task = previous
     .catch(() => {})
-    .then(() => processIncoming(item, jid, text, eventEpoch));
+    .then(() => processIncoming(item, jid, text, eventEpoch, media));
 
   queues.set(jid, task);
   try {

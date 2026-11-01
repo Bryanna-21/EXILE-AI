@@ -34,11 +34,15 @@ import LockScreen from '@/components/LockScreen';
 import { streamChat, streamImage, fileToDataUrl } from '@/lib/ai';
 import { offlineRespond } from '@/lib/offlineExile';
 import { speakWithProfile } from '@/lib/voiceProfiles';
+import { getExilePersonalityPrompt } from '@/lib/personality';
+import { isVenomModeEnabled } from '@/lib/venomMode';
 import { micLevelMeter, speechLevelMeter, LevelMeter } from '@/lib/audioLevel';
 import { routeToAgent } from '@/lib/agents';
 import { memoryContext } from '@/lib/memory';
 import { logReasoning } from '@/lib/reasoningLog';
 import ChatSection from '@/components/ChatSection';
+import TranscriptSection from '@/components/TranscriptSection';
+import ImageGenSection from '@/components/ImageGenSection';
 import VoiceCommandsSection from '@/components/VoiceCommandsSection';
 import ContactsSection from '@/components/ContactsSection';
 import {
@@ -53,7 +57,8 @@ import ActivityCenter from '@/components/ActivityCenter';
 
 const menuItems = [
   { id: 'api', icon: KeyRound, label: 'API' },
-  { id: 'transcript', icon: History, label: 'Chats' },
+  { id: 'transcript', icon: History, label: 'Chat History' },
+  { id: 'imagegen', icon: Wand2, label: 'Golden Canvas' },
   { id: 'contacts', icon: Contact2, label: 'Contacts' },
   { id: 'voicecmd', icon: Radio, label: 'Voice Cmds' },
   { id: 'health', icon: Activity, label: 'Health' },
@@ -106,7 +111,7 @@ const MEDIA_PANELS = new Set(['cinema', 'camera', 'analysis', 'docs', 'files']);
 const navGroups = [
   { id: 'Home', label: 'Home', icon: Home, items: [] },
   { id: 'Messages', label: 'Messages', icon: MessageSquare, items: ['whatsapp', 'calls', 'contacts'] },
-  { id: 'AI Studio', label: 'AI Studio', icon: Wand2, items: ['analysis', 'research', 'cinema', 'voicestudio', 'voice'] },
+  { id: 'AI Studio', label: 'AI Studio', icon: Wand2, items: ['analysis', 'research', 'cinema', 'imagegen', 'voicestudio', 'voice'] },
   { id: 'My Tools', label: 'My Tools', icon: Files, items: ['transcript', 'docs', 'files', 'camera', 'share', 'apps'] },
   { id: 'System', label: 'System', icon: Activity, items: ['mission', 'dashboard', 'system', 'house', 'car', 'health', 'audit', 'voicecmd'] },
   { id: 'Settings', label: 'Settings', icon: Settings, items: ['api'] },
@@ -124,11 +129,11 @@ function renderExileMessage(text: string): ReactNode[] {
 
     if (start > cursor) {
       nodes.push(
-        <span key={`text-${index++}`} className="whitespace-pre-wrap">
-          {text.slice(cursor, start)}
-        </span>,
-      );
-    }
+          <span key={`text-${index++}`} className="whitespace-pre-wrap">
+            {text.slice(cursor, start)}
+          </span>
+        );
+      }
 
     const code = match[2].replace(/\r?\n$/, "");
     if (code.trim()) {
@@ -278,7 +283,8 @@ const Index = () => {
   const renderPanel = (id: string) => {
     switch (id) {
       case 'api': return <ApiKeysSection />;
-      case 'transcript': return <ChatSection />;
+      case 'transcript': return <TranscriptSection />;
+      case 'imagegen': return <ImageGenSection />;
       case 'contacts': return <ContactsSection />;
 
       case 'voicecmd': return <VoiceCommandsSection />;
@@ -326,8 +332,7 @@ const Index = () => {
     setMuted(next);
 
     try {
-      localStorage.setItem('exile.console.muted', String(next));
-    } catch {
+      localStorage.setItem('exile.console.muted', String(next));} catch {
       // The mute button still works for this session if storage is unavailable.
     }
 
@@ -474,6 +479,7 @@ const Index = () => {
 
     const convo: Record<string, unknown>[] = [
       ...(memoryContext() ? [{ role: 'system', content: memoryContext() }] : []),
+      { role: 'system', content: getExilePersonalityPrompt(isVenomModeEnabled()) },
       { role: 'system', content: `Active agent: ${agent.name}. ${agent.systemPrompt}` },
       ...listTurns()
         .slice(-20)
@@ -593,8 +599,9 @@ const Index = () => {
     rec.onend = () => {
       if (meterRef.current) stopMeter();
       stopClip();
-      setState((s) => (s === 'listening' ? 'idle' : s));
-    };
+        setState((s) => (s === 'listening' ? 'idle' : s));
+
+  };
     recRef.current = rec;
     setState('listening');
     try {
@@ -624,7 +631,7 @@ const Index = () => {
   // WhatsApp is a full-window workspace, not a small modal overlay.
   if (panel === 'whatsapp') {
     return (
-      <div className="fixed inset-0 z-[55] flex flex-col bg-slate-950 text-cyan-100">
+      <div className="exile-panel-enter fixed inset-0 z-[55] flex flex-col bg-slate-950 text-cyan-100">
         <header className="h-12 shrink-0 flex items-center justify-between border-b border-cyan-500/20 bg-slate-950 px-4">
           <button
             onClick={() => setPanel(null)}
@@ -644,9 +651,11 @@ const Index = () => {
   }
 
   return (
-    <div className="min-h-screen bg-slate-950 text-cyan-100 relative overflow-hidden flex flex-col">
+    <div className="relative isolate flex h-dvh min-h-0 flex-col overflow-hidden bg-slate-950 text-cyan-100">
+      <img src={`${import.meta.env.BASE_URL}exile-chat-background.jpg`} alt="" aria-hidden="true" className="pointer-events-none absolute inset-0 -z-10 h-full w-full object-cover object-center opacity-60" />
+      <div className="pointer-events-none absolute inset-0 -z-10 bg-slate-950/25" />
       <div
-        className="pointer-events-none absolute inset-0 opacity-40"
+        className="pointer-events-none absolute inset-0 opacity-25"
         style={{
           backgroundImage:
             'radial-gradient(circle at 50% 45%, rgba(56,189,248,0.14), transparent 55%), linear-gradient(rgba(34,211,238,0.05) 1px, transparent 1px), linear-gradient(90deg, rgba(34,211,238,0.05) 1px, transparent 1px)',
@@ -655,13 +664,19 @@ const Index = () => {
       />
 
       {/* top bar */}
-      <header className="relative z-10 flex items-center justify-between px-5 pt-5">
-        <div className="text-[10px] tracking-[0.4em] text-cyan-400/70 space-y-1">
-          <div className="flex items-center gap-1.5">
+      <header className="relative z-10 flex shrink-0 flex-wrap items-center justify-between gap-2 px-3 pt-2 sm:px-4 sm:pt-3">
+        <div className="flex items-center gap-4">
+          <div className="hidden sm:flex h-10 w-10 items-center justify-center rounded-xl border border-cyan-400/40 bg-cyan-400/10 text-lg font-black text-cyan-200 shadow-[0_0_22px_rgba(34,211,238,0.18)]">E</div>
+          <div>
+            <div className="mb-1 text-xs font-semibold tracking-[0.32em] text-slate-100">EXILE <span className="text-cyan-300">AI</span></div>
+            <div className="text-[10px] tracking-[0.4em] text-cyan-400/70 space-y-1">
+              <div className="flex items-center gap-1.5">
             {online ? <Wifi className="w-3 h-3" /> : <WifiOff className="w-3 h-3 text-amber-400" />}
             <span>{online ? 'DATA LINK ACTIVE' : 'LOCAL MODE'}</span>
           </div>
-          <div className="font-mono text-cyan-400/50">{time.toLocaleTimeString()}</div>
+              <div className="font-mono text-cyan-400/50">{time.toLocaleTimeString()}</div>
+            </div>
+          </div>
         </div>
         <div className="flex items-center gap-2">
           <ActivityCenter />
@@ -713,21 +728,90 @@ const Index = () => {
         </div>
       </header>
 
-      {/* docking arc reactor */}
-      <button
-        onClick={listen}
-        aria-label="Speak to EXILE"
-        className="fixed z-50 transition-all duration-700 ease-in-out"
-        style={dockStyle[dock]}
-      >
-        <ArcReactor size={reactorSize} state={state} amplitude={level} />
-      </button>
+      {/* X-UI primary navigation */}
+      <aside className="fixed left-3 top-[4.5rem] bottom-3 z-20 hidden w-52 flex-col rounded-2xl border border-cyan-500/20 bg-slate-950/85 p-2 shadow-2xl backdrop-blur-xl lg:flex">
+        <div className="mb-3 px-3 pt-2 text-[9px] font-semibold tracking-[0.3em] text-cyan-500/60">COMMAND NAVIGATION</div>
+        <button onClick={() => setPanel(null)} className={`mb-1 flex items-center gap-3 rounded-xl px-3 py-3 text-left text-sm transition ${panel === null ? 'border border-cyan-400/30 bg-cyan-400/10 text-cyan-100' : 'text-slate-400 hover:bg-white/5 hover:text-cyan-100'}`}>
+          <Home className="h-4 w-4" /><span>Home</span>
+        </button>
+        <button onClick={() => setPanel('transcript')} className={`mb-1 flex items-center gap-3 rounded-xl px-3 py-3 text-left text-sm transition ${panel === 'transcript' ? 'bg-cyan-400/10 text-cyan-100' : 'text-slate-400 hover:bg-white/5 hover:text-cyan-100'}`}>
+          <MessageCircle className="h-4 w-4" /><span>Chat History</span>
+        </button>
+        <div className="my-3 border-t border-cyan-500/15" />
+        <div className="mb-2 px-3 text-[9px] tracking-[0.25em] text-cyan-500/60">WORKSPACES</div>
+        <div className="min-h-0 flex-1 space-y-1 overflow-y-auto">
+          {menuItems.filter((item) => !['api', 'transcript'].includes(item.id)).map((item) => {
+            const ItemIcon = item.icon;
+            return (
+              <button key={item.id} onClick={() => setPanel(item.id)} className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-xs text-slate-400 transition hover:bg-cyan-400/10 hover:text-cyan-100">
+                <ItemIcon className="h-4 w-4 text-cyan-400/80" /><span>{item.label}</span>
+              </button>
+            );
+          })}
+        </div>
+        <button onClick={() => setSettingsOpen(true)} className="mt-3 flex items-center gap-3 rounded-xl border border-cyan-500/20 px-3 py-3 text-xs text-cyan-200 hover:bg-cyan-400/10">
+          <Settings className="h-4 w-4" /> Settings
+        </button>
+        <div className="mt-3 rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-3">
+          <div className="flex items-center gap-2 text-[9px] tracking-widest text-emerald-300"><span className="h-1.5 w-1.5 rounded-full bg-emerald-400" /> SYSTEM READY</div>
+          <div className="mt-1 text-[10px] text-slate-500">Exile local workspace</div>
+        </div>
+      </aside>
+
+      {/* JARVIS companion and live system context */}
+      <aside className="fixed right-3 top-[4.5rem] bottom-3 z-20 hidden w-60 min-h-0 flex-col gap-2 overflow-y-auto rounded-2xl border border-cyan-500/20 bg-slate-950/85 p-3 shadow-2xl backdrop-blur-xl xl:flex">
+        <div className="flex items-center justify-between">
+          <span className="text-[9px] font-semibold tracking-[0.3em] text-cyan-400">JARVIS COMPANION</span>
+          <span className="h-2 w-2 rounded-full bg-emerald-400 shadow-[0_0_10px_rgba(52,211,153,0.8)]" />
+        </div>
+        <div className="flex flex-col items-center rounded-xl border border-cyan-500/15 bg-gradient-to-b from-cyan-500/10 to-transparent px-3 py-6">
+          <div className="flex h-20 w-20 items-center justify-center rounded-full border border-cyan-300/40 bg-cyan-400/5 shadow-[0_0_35px_rgba(34,211,238,0.16)]">
+            <ArcReactor size={68} state={state} amplitude={level} />
+          </div>
+          <div className="mt-4 text-sm font-semibold tracking-[0.2em] text-slate-100">JARVIS</div>
+          <div className="mt-1 text-[9px] tracking-widest text-cyan-400/70">PERSONAL AI COMPANION</div>
+        </div>
+        <div className="space-y-3 rounded-xl border border-white/5 bg-white/[0.03] p-3">
+          <div className="flex items-center justify-between text-xs"><span className="text-slate-500">Assistant</span><span className="text-emerald-300">{state.toUpperCase()}</span></div>
+          <div className="flex items-center justify-between text-xs"><span className="text-slate-500">Connection</span><span className={online ? 'text-emerald-300' : 'text-amber-300'}>{online ? 'ONLINE' : 'LOCAL'}</span></div>
+          <div className="flex items-center justify-between text-xs"><span className="text-slate-500">Reasoning</span><span className="text-cyan-200">{tier.toUpperCase()}</span></div>
+          <div className="flex items-center justify-between text-xs"><span className="text-slate-500">Voice</span><span className="text-cyan-200">{muted ? 'MUTED' : 'ENABLED'}</span></div>
+        </div>
+        <div className="mt-auto space-y-2">
+          <div className="px-1 text-[9px] tracking-[0.25em] text-cyan-500/60">QUICK ACTIONS</div>
+          <button onClick={startNewChat} className="flex w-full items-center gap-2 rounded-lg border border-cyan-500/20 px-3 py-2.5 text-left text-xs text-cyan-100 hover:bg-cyan-500/10"><FilePlus2 className="h-4 w-4" /> New conversation</button>
+          <button onClick={listen} className="flex w-full items-center gap-2 rounded-lg border border-cyan-500/20 px-3 py-2.5 text-left text-xs text-cyan-100 hover:bg-cyan-500/10"><Mic className="h-4 w-4" /> Voice command</button>
+          <button onClick={() => setPanel('dashboard')} className="flex w-full items-center gap-2 rounded-lg border border-cyan-500/20 px-3 py-2.5 text-left text-xs text-cyan-100 hover:bg-cyan-500/10"><Activity className="h-4 w-4" /> System monitor</button>
+        </div>
+      </aside>
+
+      {/* The companion sidebar owns the home-screen reactor; avoid a large centre overlay. */}
+      {dock !== "center" && (
+        <button
+          onClick={listen}
+          aria-label="Speak to EXILE"
+          className="fixed z-30 transition-all duration-700 ease-in-out"
+          style={dockStyle[dock]}
+        >
+          <ArcReactor size={reactorSize} state={state} amplitude={level} />
+        </button>
+      )}
 
       {/* core — persistent conversation feed */}
-      <main className="relative flex-1 flex flex-col items-center justify-end gap-4 px-6 pb-4">
+      <main
+        className="relative z-10 mx-3 my-2 flex min-h-0 min-w-0 w-auto max-w-[1800px] flex-1 flex-col items-center justify-center gap-2 overflow-hidden rounded-2xl border border-cyan-500/20 bg-slate-950/35 px-2 py-2 sm:px-4 lg:ml-[14.5rem] lg:mr-3 xl:mr-[16rem]"
+      >
+        {turns.length === 0 && (
+          <section className="relative z-10 mx-auto w-full max-w-4xl shrink-0 py-1">
+            <div className="mb-2 text-center text-[9px] font-semibold tracking-[0.45em] text-cyan-300/70">EXILE INTELLIGENCE SYSTEM</div>
+            <h1 className="text-center text-xl font-semibold tracking-[0.12em] text-white sm:text-2xl">YOUR COMMAND CENTER</h1>
+            <p className="mt-1 text-center text-[10px] tracking-wide text-slate-300/70">One workspace. Your tools, your data, your control.</p>
+            <div className="mt-2 text-center text-[8px] tracking-[0.2em] text-cyan-300/60">SYSTEM STATUS · {online ? 'CONNECTED' : 'LOCAL MODE'} · {time.toLocaleDateString()}</div>
+          </section>
+        )}
         <div
           ref={feedRef}
-          className="w-full max-w-3xl max-h-[58vh] min-h-[7rem] overflow-y-auto px-2 space-y-5"
+          className="w-full max-w-4xl min-h-0 flex-1 overflow-y-auto px-2 space-y-4"
         >
           {turns.length === 0 ? (
             <p className="text-center text-[10px] tracking-[0.4em] text-cyan-400/50">
@@ -735,7 +819,7 @@ const Index = () => {
             </p>
           ) : (
             turns.map((t) => (
-              <div key={t.id} className={t.role === 'user' ? 'ml-auto max-w-[88%] text-right' : 'mr-auto max-w-[95%]'}>
+              <div key={t.id} className={`exile-message-enter ${t.role === 'user' ? 'ml-auto max-w-[88%] text-right' : 'mr-auto max-w-[95%]'}`}>
                 <div className="text-[9px] tracking-[0.3em] text-cyan-400/50 mb-1">
                   {t.role === 'user' ? 'YOU' : 'EXILE'}
                 </div>
@@ -832,7 +916,28 @@ const Index = () => {
 
 
       {/* type bar */}
-      <footer className="relative px-5 pb-7">
+      <footer className="relative z-10 mx-3 w-auto max-w-[1800px] shrink-0 px-0 pb-2 sm:px-2 lg:ml-[14.5rem] lg:mr-3 xl:mr-[16rem]">
+        {turns.length === 0 && (
+          <div className="mx-auto mb-3 grid w-full max-w-4xl grid-cols-2 gap-2 md:grid-cols-3">
+            {[
+              { id: 'transcript', title: 'Chat History', detail: 'All your conversations with Exile', icon: MessageCircle },
+              { id: 'research', title: 'Research', detail: 'Explore and analyse information', icon: Search },
+              { id: 'cinema', title: 'Creative Studio', detail: 'Build visual storyboards', icon: Film },
+              { id: 'files', title: 'File Vault', detail: 'Access your stored files', icon: Files },
+              { id: 'dashboard', title: 'System Monitor', detail: 'Inspect system activity', icon: Activity },
+              { id: 'api', title: 'Integrations', detail: 'Manage provider connections', icon: Grid3x3 },
+            ].map((action) => {
+              const ActionIcon = action.icon;
+              return (
+                <button key={action.id} onClick={() => setPanel(action.id)} className="group min-h-0 rounded-lg border border-cyan-400/20 bg-slate-950/65 p-2.5 text-left backdrop-blur-sm transition hover:-translate-y-0.5 hover:border-cyan-300/50 hover:bg-cyan-500/10 sm:p-3">
+                  <ActionIcon className="mb-1.5 h-4 w-4 text-cyan-300 transition group-hover:text-white" />
+                  <div className="text-xs font-semibold text-slate-100">{action.title}</div>
+                  <div className="mt-0.5 text-[9px] leading-3 text-slate-400">{action.detail}</div>
+                </button>
+              );
+            })}
+          </div>
+        )}
         {attachments.length > 0 && (
           <div className="mx-auto mb-2 flex max-w-xl flex-wrap gap-2" aria-label="Attached files">
             {attachments.map((item) => (
@@ -849,7 +954,7 @@ const Index = () => {
         {attachmentError && <p role="status" className="mx-auto mb-2 max-w-xl text-xs text-amber-300">{attachmentError}</p>}
         <form
           onSubmit={(e) => { e.preventDefault(); void ask(input, undefined, attachments); }}
-          className="mx-auto max-w-xl flex items-center gap-2 rounded-full border border-cyan-500/35 bg-slate-900/70 backdrop-blur px-4 py-2 shadow-[0_0_30px_rgba(34,211,238,0.15)]"
+          className="mx-auto flex w-full max-w-4xl items-center gap-2 rounded-xl border border-cyan-500/35 bg-slate-950/90 px-3 py-2 shadow-[0_0_30px_rgba(34,211,238,0.15)] backdrop-blur-xl"
         >
           <input ref={fileInputRef} type="file" multiple className="hidden" accept="image/png,image/jpeg,image/webp,application/pdf,text/plain,application/json,.txt,.md,.markdown,.csv,.json,.log,.xml,.yaml,.yml,.toml,.js,.jsx,.ts,.tsx,.py,.html,.css,.sql,.java,.c,.h,.cpp,.hpp,.rs,.go,.sh" onChange={(event) => void handleFiles(event.target.files)} />
           <button type="button" onClick={() => fileInputRef.current?.click()} disabled={attachments.length >= MAX_ATTACHMENTS} className="text-[#e0c478] hover:text-[#f5edda] disabled:opacity-40" aria-label="Attach files" title="Attach files">
@@ -868,7 +973,7 @@ const Index = () => {
             <Send className="w-4 h-4" />
           </Button>
         </form>
-        <p className="text-center text-[9px] tracking-[0.35em] text-cyan-500/40 mt-3">
+        <p className="mt-1 text-center text-[8px] tracking-[0.2em] text-cyan-500/40">
           EXILE // YOUR AI · YOUR PC · YOUR RULES
         </p>
       </footer>
@@ -988,7 +1093,7 @@ const Index = () => {
       {/* section overlay */}
       {panel && (
         <div className="fixed inset-0 z-40 bg-slate-950/95 backdrop-blur-sm overflow-y-auto">
-          <div className="max-w-5xl mx-auto p-4">
+          <div className="exile-panel-enter max-w-5xl mx-auto p-4">
             <div className="flex items-center justify-between mb-3">
               <span className="text-[10px] tracking-[0.35em] text-cyan-400/70 uppercase">
                 {menuItems.find((m) => m.id === panel)?.label}
@@ -1029,6 +1134,8 @@ const Index = () => {
       )}
     </div>
   );
-};
+
+
+}
 
 export default Index;

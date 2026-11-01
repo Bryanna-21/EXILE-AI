@@ -6,7 +6,7 @@ declare global {
       openDashboard: () => void;
       minimizeCompanion: () => void;
       closeCompanion: () => void;
-      synthesizeVenom: (text: string) => Promise<string | null>;
+      synthesizeVenom: (text: string, profileId?: "jarvis" | "venom") => Promise<string | null>;
     };
   }
 }
