@@ -84,9 +84,9 @@ const TranscriptSection = () => {
     <div className="p-4 space-y-4 text-cyan-100">
       <div className="flex items-start justify-between gap-3">
         <div>
-          <h3 className="text-sm tracking-[0.3em] text-cyan-300">CHATS</h3>
+          <h3 className="text-sm tracking-[0.3em] text-cyan-300">CHAT HISTORY</h3>
           <p className="text-xs text-cyan-400/60 mt-1">
-            Each conversation is saved as one document on this device.
+            All your conversations with Exile, saved on this device.
           </p>
         </div>
         <div className="flex gap-2">

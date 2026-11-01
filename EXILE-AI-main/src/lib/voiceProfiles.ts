@@ -180,8 +180,14 @@ export function speakWithProfile(text: string, onEnd?: () => void) {
     if (requestId !== speechRequestId) return;
 
     const u = new SpeechSynthesisUtterance(text);
-    u.lang = "en-GB";
-    const isVenom = profile?.id === "builtin-venom" || (!profile?.builtIn && venomMode);
+    const isJarvis = profile?.id === "builtin-jarvis";
+    const isVenom = profile
+      ? profile.id === "builtin-venom"
+      : venomMode;
+
+    // JARVIS uses the confirmed male Microsoft David voice on Windows.
+    // Never silently substitute a female voice when that voice is unavailable.
+    u.lang = isJarvis ? "en-US" : "en-GB";
     u.pitch = isVenom
       ? Math.min(profile?.pitch ?? 0.78, 0.82)
       : (profile?.pitch ?? 1);
@@ -197,10 +203,13 @@ export function speakWithProfile(text: string, onEnd?: () => void) {
       const englishVoices = availableVoices.filter(
         (v) => /^en(-|_)/i.test(v.lang),
       );
-      const preferred = isVenom
-        ? englishVoices.find((v) => /male|david|mark|george|daniel|james/i.test(v.name))
-        : englishVoices.find((v) => /en-GB/i.test(v.lang) && /male|daniel|george|james/i.test(v.name))
-          ?? englishVoices.find((v) => /en-GB/i.test(v.lang));
+      const preferred = isJarvis
+        ? englishVoices.find((v) => /microsoft david/i.test(v.name))
+          ?? englishVoices.find((v) => /male|david|mark|george|daniel|james/i.test(v.name))
+        : isVenom
+          ? englishVoices.find((v) => /male|david|mark|george|daniel|james/i.test(v.name))
+          : englishVoices.find((v) => /en-GB/i.test(v.lang) && /male|daniel|george|james/i.test(v.name))
+            ?? englishVoices.find((v) => /en-GB/i.test(v.lang));
       if (preferred) u.voice = preferred;
     }
 

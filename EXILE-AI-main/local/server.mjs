@@ -17,6 +17,7 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import crypto from "node:crypto";
+import { fileURLToPath } from "node:url";
 import { detectWhatsAppFileRequest, createWhatsAppFile } from "./whatsapp-file-generation.mjs";
 import { spawn } from "node:child_process";
 import {
@@ -46,11 +47,15 @@ import { arcConnectivity } from "./arc-connectivity.mjs";
 import { arcAutonomyEngine } from "./arc-autonomy-engine.mjs";
 import { listEligibleProcesses, terminateSelectedProcess } from "./arc-process-manager.mjs";
 
-const ROOT = process.cwd();
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const DATA_DIR = process.env.EXILE_DATA_DIR
+  ? path.resolve(process.env.EXILE_DATA_DIR)
+  : ROOT;
+const ENV_FILE = path.join(DATA_DIR, ".env");
 
 // ---------- .env loader (no dependencies) ----------
 function loadEnv() {
-  const file = path.join(ROOT, ".env");
+  const file = ENV_FILE;
   if (!fs.existsSync(file)) return;
   for (const line of fs.readFileSync(file, "utf8").split("\n")) {
     const t = line.trim();
@@ -738,7 +743,6 @@ async function handleImage(body, res) {
 }
 
 // ---------- key management (Settings -> API tab) ----------
-const ENV_FILE = path.join(ROOT, ".env");
 const MAX_KEYS = 200;
 
 function readEnvFile() {
@@ -755,8 +759,9 @@ function readEnvFile() {
 }
 
 function writeEnvFile(map) {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
   const body = [...map.entries()].map(([k, v]) => `${k}=${v}`).join("\n");
-  fs.writeFileSync(ENV_FILE, `${body}\n`, "utf8");
+  fs.writeFileSync(ENV_FILE, `${body}\n`, { encoding: "utf8", mode: 0o600 });
 }
 
 function listKeys() {

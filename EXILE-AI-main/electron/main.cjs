@@ -4,6 +4,10 @@ const fs = require("node:fs");
 const { spawn } = require("node:child_process");
 const os = require("node:os");
 
+if (process.platform === "win32") {
+  app.setAppUserModelId("com.exile.ai");
+}
+
 // Keep Chromium's disk and GPU caches in a writable temporary directory.
 const exileCacheRoot = path.join(os.tmpdir(), "EXILE-Chromium-Cache");
 const exileDiskCache = path.join(exileCacheRoot, "disk");
@@ -21,51 +25,105 @@ let apiLogStream = null;
 let mainWindow = null;
 let companionWindow = null;
 
-function startLocalApi() {
-const serverPath = path.join(__dirname, "..", "local", "server.mjs");
-if (!fs.existsSync(serverPath)) return;
+async function startLocalApi() {
+  const appRoot = app.getAppPath();
+  const serverPath = path.join(appRoot, "local", "server.mjs");
 
-try {
-const logPath = path.join(os.homedir(), ".exile-ai", "exile-api.log");
-fs.mkdirSync(path.dirname(logPath), { recursive: true });
-apiLogStream = fs.createWriteStream(logPath, { flags: "a" });
-apiLogStream.write("\n===== EXILE API START " + new Date().toISOString() + " =====\n");
-
-apiProc = spawn(process.execPath, [serverPath], {
-cwd: path.join(__dirname, ".."),
-env: {
-...process.env,
-ELECTRON_RUN_AS_NODE: "1",
-EXILE_PORT: process.env.EXILE_PORT || "8787",
-},
-stdio: ["ignore", "pipe", "pipe"],
-windowsHide: true,
-});
-
-const captureApiOutput = (label, chunk) => {
-  if (!apiLogStream) return;
-  for (const line of chunk.toString().split(/\r?\n/)) {
-    if (line) apiLogStream.write("[" + label + "] " + line + "\n");
+  if (!fs.existsSync(serverPath)) {
+    console.error("[EXILE] Local API entry point is missing:", serverPath);
+    return false;
   }
-};
 
-apiProc.stdout.on("data", (chunk) => captureApiOutput("stdout", chunk));
-apiProc.stderr.on("data", (chunk) => captureApiOutput("stderr", chunk));
+  const dataDir = app.getPath("userData");
+  const logPath = path.join(dataDir, "logs", "exile-api.log");
+  const port = process.env.EXILE_PORT || "8787";
+  const healthUrl = `http://127.0.0.1:${port}/health`;
 
-apiProc.on("error", (error) => {
-  apiLogStream?.write("[process error] " + error.message + "\\n");
-  apiProc = null;
-});
-apiProc.on("exit", (code, signal) => {
-  apiLogStream?.write("[process exit] code=" + code + " signal=" + signal + "\\n");
-  apiLogStream?.end();
-  apiLogStream = null;
-  apiProc = null;
-});
+  try {
+    fs.mkdirSync(path.dirname(logPath), { recursive: true });
+    apiLogStream = fs.createWriteStream(logPath, { flags: "a" });
+    apiLogStream.write(
+      "\n===== EXILE API START " + new Date().toISOString() + " =====\n",
+    );
 
-} catch {
-apiProc = null;
+    apiProc = spawn(process.execPath, [serverPath], {
+      cwd: appRoot,
+      env: {
+        ...process.env,
+        ELECTRON_RUN_AS_NODE: "1",
+        EXILE_PORT: port,
+        ...(app.isPackaged ? { EXILE_DATA_DIR: dataDir } : {}),
+      },
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
+    });
+
+    const child = apiProc;
+
+    const captureApiOutput = (label, chunk) => {
+      if (!apiLogStream) return;
+      for (const line of chunk.toString().split(/\r?\n/)) {
+        if (line) apiLogStream.write(`[${label}] ${line}\n`);
+      }
+    };
+
+    child.stdout.on("data", (chunk) => captureApiOutput("stdout", chunk));
+    child.stderr.on("data", (chunk) => captureApiOutput("stderr", chunk));
+
+    child.on("error", (error) => {
+      apiLogStream?.write(`[process error] ${error.message}\n`);
+      if (apiProc === child) apiProc = null;
+    });
+
+    child.on("exit", (code, signal) => {
+      apiLogStream?.write(`[process exit] code=${code} signal=${signal}\n`);
+      if (apiProc === child) apiProc = null;
+      apiLogStream?.end();
+      apiLogStream = null;
+    });
+
+    // Do not expose the UI as ready until the local API answers health checks.
+    const deadline = Date.now() + 20000;
+    while (Date.now() < deadline) {
+      if (child.exitCode !== null || child.killed) break;
+      try {
+        const response = await fetch(healthUrl, {
+          signal: AbortSignal.timeout(1200),
+        });
+        if (response.ok) {
+          apiLogStream?.write("[health] Local API is ready.\n");
+          return true;
+        }
+      } catch {
+        // The API may still be starting.
+      }
+      await new Promise((resolve) => setTimeout(resolve, 400));
+    }
+
+    apiLogStream?.write("[health] Local API did not become ready in time.\n");
+    return false;
+  } catch (error) {
+    apiLogStream?.write(`[startup error] ${error.message}\n`);
+    return false;
+  }
 }
+
+function stopLocalApi() {
+  const child = apiProc;
+  apiProc = null;
+
+  if (child && child.exitCode === null) {
+    try {
+      child.kill();
+    } catch (error) {
+      console.warn("[EXILE] Could not stop local API:", error.message);
+    }
+  }
+
+  if (apiLogStream) {
+    apiLogStream.end();
+    apiLogStream = null;
+  }
 }
 
 function configureExternalLinks(win) {
@@ -186,8 +244,9 @@ ipcMain.handle("exile:venom-synthesize", async (event, text, profileId) => {
     `  $profile = '${safeProfileId}'`,
     "  $voices = @($s.GetInstalledVoices() | Where-Object { $_.Enabled } | ForEach-Object { $_.VoiceInfo })",
     "  if ($profile -eq 'jarvis') {",
-    "    $choice = $voices | Where-Object { $_.Culture.Name -eq 'en-GB' -and $_.Gender -eq 'Male' } | Select-Object -First 1",
-    "    if (-not $choice) { $choice = $voices | Where-Object { $_.Culture.Name -eq 'en-GB' } | Select-Object -First 1 }",
+    "    $choice = $voices | Where-Object { $_.Name -eq 'Microsoft David Desktop' -and $_.Gender -eq 'Male' } | Select-Object -First 1",
+    "    if (-not $choice) { $choice = $voices | Where-Object { $_.Culture.Name -like 'en-*' -and $_.Gender -eq 'Male' } | Select-Object -First 1 }",
+    "    if (-not $choice) { throw 'JARVIS requires an installed male English voice. No suitable voice was found.' }",
     "  } else {",
     "    $choice = $voices | Where-Object { $_.Culture.Name -like 'en-*' -and $_.Gender -eq 'Male' } | Select-Object -First 1",
     "    if (-not $choice) { $choice = $voices | Where-Object { $_.Culture.Name -like 'en-*' } | Select-Object -First 1 }",
@@ -288,8 +347,15 @@ if (!gotTheLock) {
     createWindow();
   });
 
-  app.whenReady().then(() => {
-    startLocalApi();
+  app.whenReady().then(async () => {
+    const apiReady = await startLocalApi();
+    if (!apiReady) {
+      console.error(
+        "[EXILE] Local API did not become ready. See:",
+        path.join(app.getPath("userData"), "logs", "exile-api.log"),
+      );
+    }
+
     createWindow();
     createCompanionWindow();
 
@@ -299,16 +365,11 @@ if (!gotTheLock) {
     });
   });
 
-  app.on("window-all-closed", () => {
-    if (apiProc) {
-      try {
-        apiProc.kill();
-      } catch {
-        // Process may already have exited.
-      }
-      apiProc = null;
-    }
+  app.on("before-quit", () => {
+    stopLocalApi();
+  });
 
+  app.on("window-all-closed", () => {
     if (process.platform !== "darwin") {
       app.quit();
     }

@@ -247,3 +247,54 @@ animation: none;
   background: rgba(127, 29, 29, 0.5);
   box-shadow: 0 0 20px rgba(248, 113, 113, 0.15);
 }
+
+
+/* EXILE CINEMATIC COMPANION MOTION */
+.exile-companion {
+  animation: exile-panel-enter 320ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.companion-window-controls button,
+.companion-dashboard-button {
+  transition:
+    color 160ms ease,
+    background-color 160ms ease,
+    border-color 160ms ease,
+    box-shadow 240ms ease,
+    transform 160ms cubic-bezier(0.2, 0.75, 0.25, 1);
+}
+
+.companion-window-controls button:hover,
+.companion-dashboard-button:hover {
+  transform: translateY(-1px);
+}
+
+.companion-window-controls button:active,
+.companion-dashboard-button:active {
+  transform: scale(0.985);
+}
+
+.companion-window-controls button:focus-visible,
+.companion-dashboard-button:focus-visible {
+  outline: 2px solid rgba(103, 232, 249, 0.8);
+  outline-offset: 3px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .exile-companion {
+    animation: none;
+  }
+
+  .companion-window-controls button,
+  .companion-dashboard-button {
+    transition: none;
+    transform: none;
+  }
+
+  .companion-window-controls button:hover,
+  .companion-dashboard-button:hover,
+  .companion-window-controls button:active,
+  .companion-dashboard-button:active {
+    transform: none;
+  }
+}

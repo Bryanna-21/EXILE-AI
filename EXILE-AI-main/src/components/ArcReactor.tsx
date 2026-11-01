@@ -41,7 +41,8 @@ const ArcReactor = ({
 
   return (
     <div
-      className={`relative select-none ${className}`}
+      className={`exile-reactor relative select-none ${className}`}
+      data-state={state}
       style={{ width: size, height: size }}
       aria-label="EXILE core"
     >

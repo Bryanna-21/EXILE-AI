@@ -258,7 +258,7 @@ export default function ArcMemoryNotice() {
     >
       <div className="mb-3 flex items-center justify-between gap-3">
         <span className="text-xs font-semibold uppercase tracking-[0.2em] text-emerald-300">
-          ARC AI · System protection
+          EXILE SYSTEM PROTECTION
         </span>
         {alert && (
           <span className={`rounded px-2 py-1 text-xs ${
