@@ -46,6 +46,7 @@ import { arcSystemCore } from "./arc-system-core.mjs";
 import { arcConnectivity } from "./arc-connectivity.mjs";
 import { arcAutonomyEngine } from "./arc-autonomy-engine.mjs";
 import { listEligibleProcesses, terminateSelectedProcess } from "./arc-process-manager.mjs";
+import { handleTaskApi } from "./task-api.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const DATA_DIR = process.env.EXILE_DATA_DIR
@@ -847,6 +848,10 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://localhost:${PORT}`);
 
   try {
+    if (url.pathname === "/tasks" || url.pathname.startsWith("/tasks/")) {
+      if (await handleTaskApi(req, res, url)) return;
+    }
+
     if (url.pathname.startsWith("/arc/")) {
       const origin = req.headers.origin;
       const localOrigin =
