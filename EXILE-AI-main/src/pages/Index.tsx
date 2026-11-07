@@ -46,7 +46,7 @@ import ImageGenSection from '@/components/ImageGenSection';
 import VoiceCommandsSection from '@/components/VoiceCommandsSection';
 import ContactsSection from '@/components/ContactsSection';
 import {
-  TranscriptTurn, listTurns, addTurn, updateTurn, addVoiceClip, startNewSession,
+  TranscriptTurn, ChatSession, listTurns, listSessions, getActiveSessionId, openSession, addTurn, updateTurn, addVoiceClip, startNewSession,
 } from '@/lib/conversation';
 import HealthSection from '@/components/HealthSection';
 import AuditSection from '@/components/AuditSection';
@@ -54,17 +54,20 @@ import { runTool, type ToolContext } from '@/lib/tools';
 import { AiError, type ToolCall, type ModelTier } from '@/lib/ai';
 import { rememberGeneratedImage } from '@/lib/generatedImage';
 import ActivityCenter from '@/components/ActivityCenter';
+import JarvisHardwarePanel from '@/components/JarvisHardwarePanel';
+import ArcMemoryNotice from '@/components/ArcMemoryNotice';
 
 const menuItems = [
   { id: 'api', icon: KeyRound, label: 'API' },
   { id: 'transcript', icon: History, label: 'Chat History' },
+  { id: 'tools', icon: Wand2, label: 'Tools' },
   { id: 'imagegen', icon: Wand2, label: 'Golden Canvas' },
   { id: 'contacts', icon: Contact2, label: 'Contacts' },
   { id: 'voicecmd', icon: Radio, label: 'Voice Cmds' },
   { id: 'health', icon: Activity, label: 'Health' },
   { id: 'audit', icon: ShieldCheck, label: 'Audit' },
 
-  { id: 'mission', icon: LayoutDashboard, label: 'Mission' },
+  { id: 'mission', icon: LayoutDashboard, label: 'Mission Control' },
   { id: 'research', icon: BookOpen, label: 'Research' },
 
   { id: 'cinema', icon: Film, label: 'Cinema' },
@@ -80,7 +83,7 @@ const menuItems = [
   { id: 'whatsapp', icon: MessageSquare, label: 'WhatsApp' },
   { id: 'calls', icon: Phone, label: 'Calls' },
   { id: 'camera', icon: Camera, label: 'Optics' },
-  { id: 'files', icon: Files, label: 'Vault' },
+  { id: 'files', icon: Files, label: 'Files' },
   { id: 'share', icon: Share2, label: 'Share' },
 ];
 
@@ -108,14 +111,6 @@ const TEXT_FILE_EXTENSIONS = /\.(txt|md|markdown|csv|json|log|xml|yaml|yml|toml|
 /** Panels that display large media → reactor docks bottom-right. */
 const MEDIA_PANELS = new Set(['cinema', 'camera', 'analysis', 'docs', 'files']);
 
-const navGroups = [
-  { id: 'Home', label: 'Home', icon: Home, items: [] },
-  { id: 'Messages', label: 'Messages', icon: MessageSquare, items: ['whatsapp', 'calls', 'contacts'] },
-  { id: 'AI Studio', label: 'AI Studio', icon: Wand2, items: ['analysis', 'research', 'cinema', 'imagegen', 'voicestudio', 'voice'] },
-  { id: 'My Tools', label: 'My Tools', icon: Files, items: ['transcript', 'docs', 'files', 'camera', 'share', 'apps'] },
-  { id: 'System', label: 'System', icon: Activity, items: ['mission', 'dashboard', 'system', 'house', 'car', 'health', 'audit', 'voicecmd'] },
-  { id: 'Settings', label: 'Settings', icon: Settings, items: ['api'] },
-];
 
 
 function renderExileMessage(text: string): ReactNode[] {
@@ -160,9 +155,16 @@ function renderExileMessage(text: string): ReactNode[] {
 
 const Index = () => {
   const [locked, setLocked] = useState(true);
+  const [fontScale, setFontScale] = useState<number>(() => {
+    try {
+      const saved = Number(localStorage.getItem('exile.fontScale'));
+      return Number.isFinite(saved) && saved >= 0.8 && saved <= 1.5 ? saved : 1;
+    } catch {
+      return 1;
+    }
+  });
   const [panel, setPanel] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [menuCategory, setMenuCategory] = useState('Messages');
   const [online, setOnline] = useState(typeof navigator !== 'undefined' ? navigator.onLine : true);
   const [time, setTime] = useState(new Date());
   const [input, setInput] = useState('');
@@ -182,6 +184,8 @@ const Index = () => {
   const [imageError, setImageError] = useState('');
   const [imageFullscreen, setImageFullscreen] = useState(false);
   const [turns, setTurns] = useState<TranscriptTurn[]>([]);
+  const [sessions, setSessions] = useState<ChatSession[]>([]);
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [state, setState] = useState<'idle' | 'listening' | 'thinking' | 'speaking'>('idle');
   const [tier, setTier] = useState<ModelTier>(
     () => ((typeof localStorage !== 'undefined' && localStorage.getItem('exile.tier')) as ModelTier) || 'fast',
@@ -199,7 +203,11 @@ const Index = () => {
     const t = setInterval(() => setTime(new Date()), 1000);
     const up = () => setOnline(true);
     const down = () => setOnline(false);
-    const sync = () => setTurns(listTurns());
+    const sync = () => {
+      setTurns(listTurns());
+      setSessions(listSessions().sort((a, b) => b.updatedAt - a.updatedAt));
+      setActiveSessionId(getActiveSessionId());
+    };
     sync();
     window.addEventListener('online', up);
     window.addEventListener('offline', down);
@@ -211,6 +219,60 @@ const Index = () => {
       window.removeEventListener('exile:transcript', sync);
       meterRef.current?.stop();
     };
+  }, []);
+
+  useEffect(() => {
+    document.documentElement.style.setProperty('--exile-font-scale', String(fontScale));
+
+    try {
+      localStorage.setItem('exile.fontScale', String(fontScale));
+    } catch {
+      // Keep the current session usable when storage is unavailable.
+    }
+  }, [fontScale]);
+
+  useEffect(() => {
+    const handleFontShortcuts = (event: KeyboardEvent) => {
+      if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
+
+      const target = event.target;
+      if (
+        target instanceof HTMLElement &&
+        (target.isContentEditable ||
+          target.closest('input, textarea, select, [contenteditable="true"], [role="textbox"]'))
+      ) return;
+
+      const increase =
+        event.key === '+' ||
+        (event.code === 'Equal' && event.shiftKey) ||
+        event.code === 'NumpadAdd';
+
+      const decrease =
+        event.key === '-' ||
+        event.code === 'Minus' ||
+        event.code === 'NumpadSubtract';
+
+      const reset =
+        event.key === '0' ||
+        event.code === 'Digit0' ||
+        event.code === 'Numpad0';
+
+      if (!increase && !decrease && !reset) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+
+      if (reset) {
+        setFontScale(1);
+      } else if (increase) {
+        setFontScale((current) => Math.min(1.5, Math.round((current + 0.1) * 100) / 100));
+      } else {
+        setFontScale((current) => Math.max(0.8, Math.round((current - 0.1) * 100) / 100));
+      }
+    };
+
+    window.addEventListener('keydown', handleFontShortcuts, true);
+    return () => window.removeEventListener('keydown', handleFontShortcuts, true);
   }, []);
 
   useEffect(() => {
@@ -284,6 +346,34 @@ const Index = () => {
     switch (id) {
       case 'api': return <ApiKeysSection />;
       case 'transcript': return <TranscriptSection />;
+      case 'tools': return (
+        <div className="space-y-5 p-4 sm:p-6">
+          <div>
+            <h2 className="text-lg font-semibold tracking-wide text-cyan-100">EXILE TOOLS</h2>
+            <p className="mt-1 text-sm text-slate-400">
+              Open an existing EXILE capability. Your tools remain connected to their original panels.
+            </p>
+          </div>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            {menuItems
+              .filter((item) => !['api', 'transcript', 'tools', 'mission', 'apps', 'files'].includes(item.id))
+              .map((item) => {
+                const ItemIcon = item.icon;
+                return (
+                  <button
+                    key={item.id}
+                    onClick={() => setPanel(item.id)}
+                    className="flex min-h-16 items-center gap-3 rounded-xl border border-cyan-500/20 bg-slate-950/60 p-4 text-left text-sm text-cyan-100 transition hover:border-cyan-400/50 hover:bg-cyan-500/10"
+                  >
+                    <ItemIcon className="h-5 w-5 shrink-0 text-cyan-300" />
+                    <span className="flex-1">{item.label}</span>
+                    <span className="text-cyan-500/60">›</span>
+                  </button>
+                );
+              })}
+          </div>
+        </div>
+      );
       case 'imagegen': return <ImageGenSection />;
       case 'contacts': return <ContactsSection />;
 
@@ -728,31 +818,68 @@ const Index = () => {
         </div>
       </header>
 
-      {/* X-UI primary navigation */}
+      {/* Primary workspaces */}
       <aside className="fixed left-3 top-[4.5rem] bottom-3 z-20 hidden w-52 flex-col rounded-2xl border border-cyan-500/20 bg-slate-950/85 p-2 shadow-2xl backdrop-blur-xl lg:flex">
-        <div className="mb-3 px-3 pt-2 text-[9px] font-semibold tracking-[0.3em] text-cyan-500/60">COMMAND NAVIGATION</div>
+        <div className="mb-3 px-3 pt-2 text-[9px] font-semibold tracking-[0.3em] text-cyan-500/60">EXILE WORKSPACES</div>
         <button onClick={() => setPanel(null)} className={`mb-1 flex items-center gap-3 rounded-xl px-3 py-3 text-left text-sm transition ${panel === null ? 'border border-cyan-400/30 bg-cyan-400/10 text-cyan-100' : 'text-slate-400 hover:bg-white/5 hover:text-cyan-100'}`}>
           <Home className="h-4 w-4" /><span>Home</span>
         </button>
         <button onClick={() => setPanel('transcript')} className={`mb-1 flex items-center gap-3 rounded-xl px-3 py-3 text-left text-sm transition ${panel === 'transcript' ? 'bg-cyan-400/10 text-cyan-100' : 'text-slate-400 hover:bg-white/5 hover:text-cyan-100'}`}>
           <MessageCircle className="h-4 w-4" /><span>Chat History</span>
         </button>
-        <div className="my-3 border-t border-cyan-500/15" />
-        <div className="mb-2 px-3 text-[9px] tracking-[0.25em] text-cyan-500/60">WORKSPACES</div>
-        <div className="min-h-0 flex-1 space-y-1 overflow-y-auto">
-          {menuItems.filter((item) => !['api', 'transcript'].includes(item.id)).map((item) => {
-            const ItemIcon = item.icon;
-            return (
-              <button key={item.id} onClick={() => setPanel(item.id)} className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-xs text-slate-400 transition hover:bg-cyan-400/10 hover:text-cyan-100">
-                <ItemIcon className="h-4 w-4 text-cyan-400/80" /><span>{item.label}</span>
-              </button>
-            );
-          })}
-        </div>
-        <button onClick={() => setSettingsOpen(true)} className="mt-3 flex items-center gap-3 rounded-xl border border-cyan-500/20 px-3 py-3 text-xs text-cyan-200 hover:bg-cyan-400/10">
-          <Settings className="h-4 w-4" /> Settings
+        <button onClick={() => setPanel('files')} className={`mb-1 flex items-center gap-3 rounded-xl px-3 py-3 text-left text-sm transition ${panel === 'files' ? 'bg-cyan-400/10 text-cyan-100' : 'text-slate-400 hover:bg-white/5 hover:text-cyan-100'}`}>
+          <Files className="h-4 w-4" /><span>Files</span>
         </button>
-        <div className="mt-3 rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-3">
+        <button onClick={() => setPanel('apps')} className={`mb-1 flex items-center gap-3 rounded-xl px-3 py-3 text-left text-sm transition ${panel === 'apps' ? 'bg-cyan-400/10 text-cyan-100' : 'text-slate-400 hover:bg-white/5 hover:text-cyan-100'}`}>
+          <Grid3x3 className="h-4 w-4" /><span>Apps</span>
+        </button>
+        <button onClick={() => setPanel('tools')} className={`mb-1 flex items-center gap-3 rounded-xl px-3 py-3 text-left text-sm transition ${panel === 'tools' ? 'bg-cyan-400/10 text-cyan-100' : 'text-slate-400 hover:bg-white/5 hover:text-cyan-100'}`}>
+          <Wand2 className="h-4 w-4" /><span>Tools</span>
+        </button>
+        <button onClick={() => setPanel('mission')} className={`mb-1 flex items-center gap-3 rounded-xl px-3 py-3 text-left text-sm transition ${panel === 'mission' ? 'bg-cyan-400/10 text-cyan-100' : 'text-slate-400 hover:bg-white/5 hover:text-cyan-100'}`}>
+          <LayoutDashboard className="h-4 w-4" /><span>Mission Control</span>
+        </button>
+        <div className="my-3 border-t border-cyan-500/25" />
+        <div className="mb-2 px-3 text-[9px] font-semibold tracking-[0.3em] text-cyan-500/60">
+          CONVERSATIONS
+        </div>
+        <div className="min-h-0 flex-1 space-y-1 overflow-y-auto overscroll-contain pr-1">
+          {sessions.length === 0 ? (
+            <p className="px-3 py-2 text-[10px] leading-relaxed text-slate-500">
+              Your conversations will appear here.
+            </p>
+          ) : (
+            sessions.map((session) => (
+              <button
+                key={session.id}
+                onClick={() => {
+                  openSession(session.id);
+                  setPanel(null);
+                  setReply('');
+                  setGeneratedImage(null);
+                  setImageError('');
+                  setImageFullscreen(false);
+                  setState('idle');
+                }}
+                title={session.title}
+                className={`w-full rounded-lg px-3 py-2 text-left transition ${
+                  activeSessionId === session.id
+                    ? 'border border-cyan-400/25 bg-cyan-400/10 text-cyan-100'
+                    : 'border border-transparent text-slate-400 hover:bg-white/5 hover:text-cyan-100'
+                }`}
+              >
+                <span className="block truncate text-xs">
+                  {session.title || 'Untitled conversation'}
+                </span>
+                <span className="mt-1 flex items-center justify-between gap-2 text-[9px] text-slate-500">
+                  <span>{session.turns.length} messages</span>
+                  <span>{new Date(session.updatedAt).toLocaleDateString()}</span>
+                </span>
+              </button>
+            ))
+          )}
+        </div>
+        <div className="mt-2 shrink-0 rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-3">
           <div className="flex items-center gap-2 text-[9px] tracking-widest text-emerald-300"><span className="h-1.5 w-1.5 rounded-full bg-emerald-400" /> SYSTEM READY</div>
           <div className="mt-1 text-[10px] text-slate-500">Exile local workspace</div>
         </div>
@@ -777,7 +904,10 @@ const Index = () => {
           <div className="flex items-center justify-between text-xs"><span className="text-slate-500">Reasoning</span><span className="text-cyan-200">{tier.toUpperCase()}</span></div>
           <div className="flex items-center justify-between text-xs"><span className="text-slate-500">Voice</span><span className="text-cyan-200">{muted ? 'MUTED' : 'ENABLED'}</span></div>
         </div>
-        <div className="mt-auto space-y-2">
+        <JarvisHardwarePanel />
+        <ArcMemoryNotice />
+
+  <div className="mt-auto space-y-2">
           <div className="px-1 text-[9px] tracking-[0.25em] text-cyan-500/60">QUICK ACTIONS</div>
           <button onClick={startNewChat} className="flex w-full items-center gap-2 rounded-lg border border-cyan-500/20 px-3 py-2.5 text-left text-xs text-cyan-100 hover:bg-cyan-500/10"><FilePlus2 className="h-4 w-4" /> New conversation</button>
           <button onClick={listen} className="flex w-full items-center gap-2 rounded-lg border border-cyan-500/20 px-3 py-2.5 text-left text-xs text-cyan-100 hover:bg-cyan-500/10"><Mic className="h-4 w-4" /> Voice command</button>
@@ -978,64 +1108,58 @@ const Index = () => {
         </p>
       </footer>
 
-      {/* settings */}
+      {/* Workspace and utility menu */}
       <Sheet open={settingsOpen} onOpenChange={setSettingsOpen}>
         <SheetContent side="right" className="w-full sm:max-w-sm bg-slate-950 border-cyan-500/30 text-cyan-100 overflow-y-auto">
           <SheetHeader>
             <SheetTitle className="text-cyan-100 tracking-[0.3em] text-sm">EXILE MENU</SheetTitle>
           </SheetHeader>
-          <div className="mt-5 space-y-2">
-            <button
-              onClick={() => { setPanel(null); setSettingsOpen(false); }}
-              className="flex w-full items-center gap-3 rounded-lg border border-cyan-500/20 bg-slate-900/60 px-3 py-3 text-left text-sm text-cyan-100 hover:bg-cyan-500/10"
-            >
-              <Home className="h-5 w-5 text-cyan-300" />
-              <span className="flex-1">Home</span>
-            </button>
 
-            {navGroups.filter((group) => group.id !== 'Home').map((group) => {
-              const GroupIcon = group.icon;
-              const selected = menuCategory === group.id;
-              const tools = menuItems.filter((item) => group.items.includes(item.id));
-              return (
-                <div key={group.id} className="overflow-hidden rounded-lg border border-cyan-500/20">
+          <div className="mt-5">
+            <p className="mb-2 px-1 text-[9px] font-semibold tracking-[0.25em] text-cyan-500/60">WORKSPACES</p>
+            <div className="space-y-2">
+              {[
+                { id: 'home', label: 'Home', icon: Home },
+                { id: 'transcript', label: 'Chat History', icon: MessageCircle },
+                { id: 'files', label: 'Files', icon: Files },
+                { id: 'apps', label: 'Apps', icon: Grid3x3 },
+                { id: 'tools', label: 'Tools', icon: Wand2 },
+                { id: 'mission', label: 'Mission Control', icon: LayoutDashboard },
+              ].map((item) => {
+                const ItemIcon = item.icon;
+                return (
                   <button
-                    onClick={() => setMenuCategory(selected ? '' : group.id)}
-                    aria-expanded={selected}
-                    className={`flex w-full items-center gap-3 px-3 py-3 text-left text-sm transition ${
-                      selected ? 'bg-cyan-500/10 text-cyan-100' : 'bg-slate-900/60 text-cyan-200 hover:bg-cyan-500/10'
-                    }`}
+                    key={item.id}
+                    onClick={() => {
+                      setPanel(item.id === 'home' ? null : item.id);
+                      setSettingsOpen(false);
+                    }}
+                    className="flex w-full items-center gap-3 rounded-lg border border-cyan-500/20 bg-slate-900/60 px-3 py-3 text-left text-sm text-cyan-100 transition hover:bg-cyan-500/10"
                   >
-                    <GroupIcon className="h-5 w-5 text-cyan-300" />
-                    <span className="flex-1">{group.label}</span>
-                    <span className="text-xs text-cyan-500/70">{tools.length}</span>
-                    <span className="text-cyan-400/70">{selected ? '−' : '+'}</span>
+                    <ItemIcon className="h-5 w-5 text-cyan-300" />
+                    <span className="flex-1">{item.label}</span>
+                    <span className="text-cyan-500/50">›</span>
                   </button>
-                  {selected && (
-                    <div className="space-y-1 border-t border-cyan-500/15 bg-slate-950/70 p-2">
-                      {tools.map((item) => {
-                        const ItemIcon = item.icon;
-                        return (
-                          <button
-                            key={item.id}
-                            onClick={() => { setPanel(item.id); setSettingsOpen(false); }}
-                            className="flex w-full items-center gap-3 rounded-md px-3 py-2.5 text-left text-sm text-cyan-100/85 transition hover:bg-cyan-500/10 hover:text-cyan-50"
-                          >
-                            <ItemIcon className="h-4 w-4 text-cyan-400/80" />
-                            <span className="flex-1">{item.label}</span>
-                            <span className="text-cyan-500/50">›</span>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
+                );
+              })}
+            </div>
           </div>
+
+          <div className="mt-6 border-t border-cyan-500/15 pt-4">
+            <p className="mb-2 px-1 text-[9px] font-semibold tracking-[0.25em] text-cyan-500/60">PREFERENCES & ACCESS</p>
+            <button
+              onClick={() => { setPanel('api'); setSettingsOpen(false); }}
+              className="flex w-full items-center gap-3 rounded-lg border border-cyan-500/20 bg-slate-900/60 px-3 py-3 text-left text-sm text-cyan-100 transition hover:bg-cyan-500/10"
+            >
+              <Settings className="h-5 w-5 text-cyan-300" />
+              <span className="flex-1">Settings & API Keys</span>
+              <span className="text-cyan-500/50">›</span>
+            </button>
+          </div>
+
           <button
             onClick={() => { setSettingsOpen(false); setLocked(true); }}
-            className="mt-6 w-full rounded-md border border-cyan-500/30 py-2 text-[10px] tracking-[0.3em] text-cyan-300/80 hover:bg-cyan-500/10"
+            className="mt-6 w-full rounded-md border border-cyan-500/30 py-3 text-[10px] tracking-[0.3em] text-cyan-300/80 transition hover:bg-cyan-500/10"
           >
             LOCK EXILE
           </button>

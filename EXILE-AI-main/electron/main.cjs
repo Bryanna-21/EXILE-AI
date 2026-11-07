@@ -47,12 +47,15 @@ async function startLocalApi() {
     );
 
     apiProc = spawn(process.execPath, [serverPath], {
-      cwd: appRoot,
+      cwd: app.isPackaged ? path.dirname(process.execPath) : appRoot,
       env: {
         ...process.env,
         ELECTRON_RUN_AS_NODE: "1",
         EXILE_PORT: port,
-        ...(app.isPackaged ? { EXILE_DATA_DIR: dataDir } : {}),
+        ...(app.isPackaged ? {
+          EXILE_DATA_DIR: dataDir,
+          EXILE_TASK_STORE_DIR: path.join(dataDir, ".exile-ai", "tasks"),
+        } : {}),
       },
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,

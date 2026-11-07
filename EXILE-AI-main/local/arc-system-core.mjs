@@ -11,6 +11,7 @@ $os = Get-CimInstance Win32_OperatingSystem
 $processors = @(Get-CimInstance Win32_Processor)
 $batteries = @(Get-CimInstance Win32_Battery)
 $adapters = @(Get-NetAdapter)
+$adapterStats = @(Get-NetAdapterStatistics -ErrorAction SilentlyContinue)
 $firewall = @(Get-NetFirewallProfile)
 $defender = Get-MpComputerStatus
 $disks = @(Get-CimInstance Win32_LogicalDisk -Filter 'DriveType=3')
@@ -78,12 +79,16 @@ $processData = @($processes | ForEach-Object {
 })
 
 $networkData = @($adapters | ForEach-Object {
+  $adapterName = $_.Name
+  $stats = $adapterStats | Where-Object { $_.Name -eq $adapterName } | Select-Object -First 1
   [PSCustomObject]@{
-    name = $_.Name
+    name = $adapterName
     description = $_.InterfaceDescription
     status = [string]$_.Status
     linkSpeed = [string]$_.LinkSpeed
     macAddress = $_.MacAddress
+    receivedBytes = if ($null -ne $stats) { [long]$stats.ReceivedBytes } else { $null }
+    sentBytes = if ($null -ne $stats) { [long]$stats.SentBytes } else { $null }
   }
 })
 
@@ -165,7 +170,7 @@ async function runPowerShell(script = POWERSHELL_SCRIPT) {
     ],
     {
       windowsHide: true,
-      timeout: 15000,
+      timeout: 30000,
       maxBuffer: 2 * 1024 * 1024,
     },
   );

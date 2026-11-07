@@ -10,7 +10,11 @@ const DATA_DIR = process.env.EXILE_DATA_DIR
   ? path.resolve(process.env.EXILE_DATA_DIR)
   : ROOT;
 
-const store = new TaskStore(path.join(DATA_DIR, ".exile-ai", "tasks"));
+const TASK_STORE_DIR = process.env.EXILE_TASK_STORE_DIR
+  ? path.resolve(process.env.EXILE_TASK_STORE_DIR)
+  : path.join(DATA_DIR, ".exile-ai", "tasks");
+
+const store = new TaskStore(TASK_STORE_DIR);
 await store.recoverInterrupted();
 
 const gateway = new PermissionGateway();

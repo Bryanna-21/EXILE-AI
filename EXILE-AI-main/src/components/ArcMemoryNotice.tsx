@@ -254,7 +254,7 @@ export default function ArcMemoryNotice() {
     <aside
       role="region"
       aria-label="ARC memory management"
-      className="fixed bottom-5 right-5 z-[9999] w-[min(440px,calc(100vw-2rem))] rounded-xl border border-emerald-400/40 bg-[#080d0c] p-5 text-white shadow-2xl"
+      className="w-full min-w-0 max-h-[min(65vh,640px)] overflow-y-auto rounded-xl border border-emerald-400/30 bg-[#080d0c] p-3 text-white shadow-lg"
     >
       <div className="mb-3 flex items-center justify-between gap-3">
         <span className="text-xs font-semibold uppercase tracking-[0.2em] text-emerald-300">
@@ -355,14 +355,14 @@ export default function ArcMemoryNotice() {
               onClick={() => void answer("review_apps")}
               className="rounded-lg bg-emerald-400 px-4 py-2 text-sm font-semibold text-black disabled:opacity-50"
             >
-              Yes, review apps
+              Run
             </button>
             <button
               disabled={busy}
               onClick={() => void answer("dismiss")}
               className="rounded-lg border border-white/20 px-4 py-2 text-sm disabled:opacity-50"
             >
-              No, not now
+              Ignore
             </button>
           </div>
         </>

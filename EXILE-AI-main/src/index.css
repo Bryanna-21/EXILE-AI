@@ -97,6 +97,22 @@
     @apply border-border;
   }
 
+  html {
+    font-size: calc(16px * var(--exile-font-scale, 1));
+  }
+
+  @media (max-width: 1200px) {
+    html {
+      font-size: calc(17px * var(--exile-font-scale, 1));
+    }
+  }
+
+  @media (max-width: 900px) {
+    html {
+      font-size: calc(17.5px * var(--exile-font-scale, 1));
+    }
+  }
+
   body {
     @apply bg-background text-foreground;
   }
