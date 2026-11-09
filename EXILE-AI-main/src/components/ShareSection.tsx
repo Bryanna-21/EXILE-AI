@@ -1,130 +1,66 @@
+import { useState } from "react";
+import { Share2, Copy, Mail, MessageCircle } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { toast } from "sonner";
 
-import { useState } from 'react';
-import { Share2, Smartphone, Globe, Users, Link, Send, Facebook, Twitter, Instagram } from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { ScrollArea } from '@/components/ui/scroll-area';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+const ctl = "border border-cyan-500/40 bg-transparent text-cyan-100 hover:bg-cyan-500/10 disabled:opacity-40";
 
-interface App {
-  id: string;
-  name: string;
-  icon: React.ReactNode;
-  category: string;
-}
-
-interface OnlineContent {
-  id: string;
-  title: string;
-  platform: string;
-  type: string;
-}
-
+/** Compose something and hand it to the system share sheet, or to an app link you choose. */
 const ShareSection = () => {
-  const [apps] = useState<App[]>([
-    { id: '1', name: 'WhatsApp', icon: <Send className="w-5 h-5" />, category: 'messaging' },
-    { id: '2', name: 'Facebook', icon: <Facebook className="w-5 h-5" />, category: 'social' },
-    { id: '3', name: 'Twitter', icon: <Twitter className="w-5 h-5" />, category: 'social' },
-    { id: '4', name: 'Instagram', icon: <Instagram className="w-5 h-5" />, category: 'social' },
-    { id: '5', name: 'Email', icon: <Send className="w-5 h-5" />, category: 'messaging' },
-    { id: '6', name: 'Messages', icon: <Send className="w-5 h-5" />, category: 'messaging' },
-  ]);
+  const [title, setTitle] = useState("");
+  const [text, setText] = useState("");
+  const [url, setUrl] = useState("");
 
-  const [onlineContent] = useState<OnlineContent[]>([
-    { id: '1', title: 'Latest News Article', platform: 'News', type: 'article' },
-    { id: '2', title: 'Funny Meme Collection', platform: 'Reddit', type: 'image' },
-    { id: '3', title: 'Tutorial Video', platform: 'YouTube', type: 'video' },
-    { id: '4', title: 'Recipe Blog Post', platform: 'Blog', type: 'article' },
-    { id: '5', title: 'Product Review', platform: 'Amazon', type: 'review' },
-  ]);
+  const full = [text.trim(), url.trim()].filter(Boolean).join("\n");
+  const canNative = typeof navigator !== "undefined" && typeof navigator.share === "function";
+  const empty = !full && !title.trim();
+
+  const share = async () => {
+    try {
+      await navigator.share({ title: title.trim() || undefined, text: text.trim() || undefined, url: url.trim() || undefined });
+    } catch (e: unknown) {
+      if ((e as { name?: string })?.name !== "AbortError") toast.error("Sharing was not completed.");
+    }
+  };
+
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText([title.trim(), full].filter(Boolean).join("\n"));
+      toast.success("Copied.");
+    } catch {
+      toast.error("Copy was blocked by the browser.");
+    }
+  };
+
+  const open = (href: string) => window.open(href, "_blank", "noopener,noreferrer");
 
   return (
-    <div className="h-96">
-      <div className="p-4 border-b bg-gradient-to-r from-pink-50 to-purple-50">
-        <h2 className="text-xl font-semibold text-gray-800 flex items-center gap-2">
-          <Share2 className="w-5 h-5 text-pink-600" />
-          Share Hub
-        </h2>
-        <p className="text-sm text-gray-600 mt-1">Access apps and share content</p>
+    <div className="p-4 space-y-3 bg-slate-950 text-cyan-100 min-h-[28rem]">
+      <div className="flex items-center gap-2">
+        <Share2 className="w-4 h-4 text-cyan-300" />
+        <h2 className="text-sm tracking-widest">SHARE HUB</h2>
       </div>
-
-      <div className="p-4">
-        <Tabs defaultValue="apps" className="w-full">
-          <TabsList className="grid w-full grid-cols-2">
-            <TabsTrigger value="apps" className="text-xs">
-              <Smartphone className="w-4 h-4 mr-2" />
-              Apps
-            </TabsTrigger>
-            <TabsTrigger value="online" className="text-xs">
-              <Globe className="w-4 h-4 mr-2" />
-              Online
-            </TabsTrigger>
-          </TabsList>
-
-          <TabsContent value="apps" className="mt-4">
-            <ScrollArea className="h-64">
-              <div className="grid grid-cols-2 gap-2">
-                {apps.map((app) => (
-                  <Card key={app.id} className="cursor-pointer hover:shadow-md transition-shadow">
-                    <CardContent className="p-4 text-center">
-                      <div className="flex flex-col items-center gap-2">
-                        <div className="w-10 h-10 bg-gradient-to-br from-blue-500 to-purple-500 rounded-lg flex items-center justify-center text-white">
-                          {app.icon}
-                        </div>
-                        <span className="text-xs font-medium text-gray-700">{app.name}</span>
-                        <span className="text-xs text-gray-500 capitalize">{app.category}</span>
-                      </div>
-                    </CardContent>
-                  </Card>
-                ))}
-              </div>
-            </ScrollArea>
-          </TabsContent>
-
-          <TabsContent value="online" className="mt-4">
-            <ScrollArea className="h-64">
-              <div className="space-y-3">
-                {onlineContent.map((content) => (
-                  <Card key={content.id} className="cursor-pointer hover:shadow-md transition-shadow">
-                    <CardHeader className="pb-2">
-                      <CardTitle className="text-sm flex items-center justify-between">
-                        <span className="truncate">{content.title}</span>
-                        <Button variant="ghost" size="sm">
-                          <Share2 className="w-4 h-4" />
-                        </Button>
-                      </CardTitle>
-                    </CardHeader>
-                    <CardContent className="pt-0">
-                      <div className="flex items-center gap-2 text-xs text-gray-500">
-                        <Globe className="w-3 h-3" />
-                        <span>{content.platform}</span>
-                        <span>•</span>
-                        <span className="capitalize">{content.type}</span>
-                      </div>
-                    </CardContent>
-                  </Card>
-                ))}
-              </div>
-            </ScrollArea>
-          </TabsContent>
-        </Tabs>
-
-        {/* Quick Share Actions */}
-        <div className="mt-4 grid grid-cols-3 gap-2">
-          <Button variant="outline" size="sm" className="text-xs">
-            <Link className="w-3 h-3 mr-1" />
-            Copy Link
-          </Button>
-          <Button variant="outline" size="sm" className="text-xs">
-            <Users className="w-3 h-3 mr-1" />
-            Share
-          </Button>
-          <Button variant="outline" size="sm" className="text-xs">
-            <Send className="w-3 h-3 mr-1" />
-            Send
-          </Button>
-        </div>
+      <p className="text-[11px] text-cyan-400/70">
+        Write a message, then send it with your device's share sheet or open it in an email or WhatsApp compose window. EXILE does not post anything itself and does not hold your social accounts.
+      </p>
+      <Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Title or subject (optional)" aria-label="Title" className="bg-slate-900 border-cyan-500/30 text-cyan-100" />
+      <Textarea value={text} onChange={(e) => setText(e.target.value)} rows={4} placeholder="Message" aria-label="Message" className="bg-slate-900 border-cyan-500/30 text-cyan-100 text-xs" />
+      <Input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="Link (optional)" aria-label="Link" className="bg-slate-900 border-cyan-500/30 text-cyan-100" />
+      <div className="flex flex-wrap gap-2">
+        <Button size="sm" variant="ghost" className={ctl} disabled={empty || !canNative} onClick={() => void share()} title={canNative ? undefined : "This browser has no system share sheet"}>
+          <Share2 className="w-3.5 h-3.5 mr-1.5" /> Share…
+        </Button>
+        <Button size="sm" variant="ghost" className={ctl} disabled={empty} onClick={() => void copy()}><Copy className="w-3.5 h-3.5 mr-1.5" /> Copy</Button>
+        <Button size="sm" variant="ghost" className={ctl} disabled={empty} onClick={() => open(`mailto:?subject=${encodeURIComponent(title.trim())}&body=${encodeURIComponent(full)}`)}>
+          <Mail className="w-3.5 h-3.5 mr-1.5" /> Email
+        </Button>
+        <Button size="sm" variant="ghost" className={ctl} disabled={empty} onClick={() => open(`https://wa.me/?text=${encodeURIComponent([title.trim(), full].filter(Boolean).join("\n"))}`)}>
+          <MessageCircle className="w-3.5 h-3.5 mr-1.5" /> WhatsApp
+        </Button>
       </div>
+      {!canNative && <p className="text-[10px] text-cyan-500/60">This browser has no system share sheet, so “Share…” is unavailable. Copy, Email and WhatsApp still work.</p>}
     </div>
   );
 };

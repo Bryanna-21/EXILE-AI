@@ -12,6 +12,7 @@ const VideoStoryboardSection = () => {
   const [prompt, setPrompt] = useState("");
   const [frames, setFrames] = useState<string[]>([]);
   const [playing, setPlaying] = useState(false);
+  const [current, setCurrent] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
 
   const build = async () => {
@@ -41,8 +42,10 @@ const VideoStoryboardSection = () => {
     if (!frames.length) return;
     setPlaying(true);
     for (let i = 0; i < frames.length; i++) {
+      setCurrent(i);
       await new Promise((r) => setTimeout(r, 900));
     }
+    setCurrent(null);
     setPlaying(false);
   };
 
@@ -52,7 +55,7 @@ const VideoStoryboardSection = () => {
         <Film className="w-4 h-4 text-cyan-300" />
         <h2 className="text-sm tracking-widest">CINEMA · STORYBOARD</h2>
       </div>
-      <p className="text-[11px] text-cyan-400/70">Generates 4 cinematic keyframes. Real motion video is enabled in the native build.</p>
+      <p className="text-[11px] text-cyan-400/70">Generates 4 still keyframes. No video is produced; “Play” just highlights each still in turn.</p>
       <div className="flex gap-2">
         <Input value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder="Scene description…"
           className="bg-slate-900 border-cyan-500/30 text-cyan-100 placeholder:text-cyan-500/40" />
@@ -63,7 +66,7 @@ const VideoStoryboardSection = () => {
       </div>
       <div className="grid grid-cols-2 gap-2">
         {frames.map((f, i) => (
-          <div key={i} className="relative aspect-video border border-cyan-500/30 rounded overflow-hidden">
+          <div key={i} className={`relative aspect-video border rounded overflow-hidden ${current === i ? "border-cyan-300 ring-2 ring-cyan-300" : "border-cyan-500/30"}`}>
             <img src={f} alt={`frame ${i + 1}`} className="w-full h-full object-cover" />
             <div className="absolute top-1 left-1 text-[10px] tracking-widest bg-slate-950/70 px-1.5 py-0.5 rounded">F{i + 1}</div>
             <a href={f} download={`exile-frame-${i + 1}.png`} className="absolute bottom-1 right-1 bg-cyan-500/20 border border-cyan-400/40 rounded p-1">

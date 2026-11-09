@@ -12,6 +12,8 @@
     "electron": "npm run build && electron .",
     "package:win": "npm run build && npm run icons && electron-builder --win nsis",
     "icons": "node scripts/build-icons.cjs",
+    "test": "node --test \"test/*.test.mjs\"",
+    "typecheck": "tsc -p tsconfig.app.json --noEmit",
     "test:phase1": "node --test test/task-foundation.test.mjs test/arc-system-core.test.mjs test/arc-connectivity.test.mjs test/arc-autonomy-engine.test.mjs"
   },
   "dependencies": {

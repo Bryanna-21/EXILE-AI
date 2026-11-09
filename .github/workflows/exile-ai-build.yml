@@ -1,0 +1,116 @@
+name: EXILE AI - Build and Release
+
+on:
+  push:
+    branches:
+      - main
+      - integration/claude-working-tree
+    tags:
+      - "v*"
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: exile-ai-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Linux Tests and TypeScript Validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    defaults:
+      run:
+        working-directory: EXILE-AI-main
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: EXILE-AI-main/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run automated tests
+        run: npm test
+
+      - name: Run TypeScript checks
+        run: npm run typecheck
+
+  build-windows:
+    name: Build Windows Installer
+    needs: test
+    runs-on: windows-latest
+    timeout-minutes: 45
+
+    defaults:
+      run:
+        working-directory: EXILE-AI-main
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: EXILE-AI-main/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run Windows-compatible native-app tests
+        run: >-
+          node --test --test-name-pattern="windows executable paths|unsupported platforms|duplicate keys|arguments are split|arguments: rejects|command interpreters|names and categories|store persists|store backs up|store drops|store refuses|discovery reads shortcuts|discovered import|shortcut import|IPC handlers|preload bridge|main process keeps" test/native-apps.test.mjs
+
+      - name: Run TypeScript checks on Windows
+        run: npm run typecheck
+
+      - name: Build Windows installer
+        run: npm run package:win
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: EXILE-AI-Windows-Installer
+          path: EXILE-AI-main/electron-release-optimized/*
+          if-no-files-found: error
+          retention-days: 14
+
+  publish-release:
+    name: Publish GitHub Release
+    needs: build-windows
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download Windows installer
+        uses: actions/download-artifact@v4
+        with:
+          name: EXILE-AI-Windows-Installer
+          path: release-assets
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: EXILE AI ${{ github.ref_name }}
+          generate_release_notes: true
+          files: release-assets/*
+          fail_on_unmatched_files: true

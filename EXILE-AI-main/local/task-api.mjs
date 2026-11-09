@@ -4,6 +4,7 @@ import { TaskStore } from "./task-store.mjs";
 import { PermissionGateway } from "./permission-gateway.mjs";
 import { ToolRegistry } from "./tool-registry.mjs";
 import { TaskOrchestrator } from "./task-orchestrator.mjs";
+import { summarizeTask } from "./task-summary.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const DATA_DIR = process.env.EXILE_DATA_DIR
@@ -20,24 +21,36 @@ await store.recoverInterrupted();
 const gateway = new PermissionGateway();
 const registry = new ToolRegistry();
 
-async function callModel(messages) {
-  // Preserve EXILE's free-tier policy. No paid-provider fallback.
-  const order = process.env.EXILE_GEMINI_FREE_TIER === "true"
+const PLANNER_PROVIDERS = {
+  gemini: {
+    key: "GEMINI_API_KEY",
+    base: "https://generativelanguage.googleapis.com/v1beta/openai",
+    model: "gemini-3.8-flash",
+  },
+  openrouter: {
+    key: "OPENROUTER_API_KEY",
+    base: "https://openrouter.ai/api/v1",
+    model: "openrouter/free",
+  },
+};
+
+// Preserve EXILE's free-tier policy. No paid-provider fallback.
+function plannerProviderOrder() {
+  return process.env.EXILE_GEMINI_FREE_TIER === "true"
     ? ["gemini", "openrouter"]
     : ["openrouter"];
+}
 
-  const providers = {
-    gemini: {
-      key: "GEMINI_API_KEY",
-      base: "https://generativelanguage.googleapis.com/v1beta/openai",
-      model: "gemini-3.8-flash",
-    },
-    openrouter: {
-      key: "OPENROUTER_API_KEY",
-      base: "https://openrouter.ai/api/v1",
-      model: "openrouter/free",
-    },
-  };
+/** Which permitted reasoning providers have a key. Reports booleans and ids only, never keys. */
+function defaultPlannerStatus() {
+  const permitted = plannerProviderOrder();
+  const configured = permitted.filter((id) => !!process.env[PLANNER_PROVIDERS[id].key]);
+  return { configured: configured.length > 0, providers: configured, permitted };
+}
+
+async function callModel(messages) {
+  const order = plannerProviderOrder();
+  const providers = PLANNER_PROVIDERS;
 
   let lastError = "No permitted free reasoning provider is configured.";
 
@@ -133,7 +146,14 @@ function taskError(res, error) {
   });
 }
 
-export async function handleTaskApi(req, res, url) {
+/**
+ * Build the /tasks request handler around explicit dependencies. The default
+ * export below wires the real store, registry and orchestrator; tests inject
+ * their own so the real routing, origin checks and state machine run end to end.
+ * (Body intentionally not re-indented to keep this diff reviewable.)
+ */
+export function createTaskApiHandler({ store, orchestrator, registry, plannerStatus }) {
+return async function handleTaskApi(req, res, url) {
   if (url.pathname !== "/tasks" && !url.pathname.startsWith("/tasks/")) {
     return false;
   }
@@ -145,7 +165,33 @@ export async function handleTaskApi(req, res, url) {
 
   try {
     if (req.method === "GET" && url.pathname === "/tasks") {
-      return send(res, 200, { ok: true, tasks: store.list() }), true;
+      const tasks = store.list();
+      return send(res, 200, {
+        ok: true,
+        tasks: url.searchParams.get("view") === "summary" ? tasks.map(summarizeTask) : tasks,
+      }), true;
+    }
+
+    // What the task engine can really do right now: planner provider + per-tool availability.
+    if (req.method === "GET" && url.pathname === "/tasks/capabilities") {
+      const availability = registry.availability();
+      send(res, 200, {
+        ok: true,
+        checkedAt: new Date().toISOString(),
+        planner: plannerStatus(),
+        limits: {
+          maxSteps: orchestrator.limits.maxSteps,
+          taskTimeoutMs: orchestrator.limits.taskTimeoutMs,
+        },
+        tools: registry.catalog().map((t) => ({
+          name: t.name,
+          description: t.description,
+          risk: t.risk,
+          approvalRequired: t.approvalRequired,
+          available: availability[t.name] === true,
+        })),
+      });
+      return true;
     }
 
     const eventMatch = url.pathname.match(/^\/tasks\/([^/]+)\/events$/);
@@ -237,4 +283,12 @@ export async function handleTaskApi(req, res, url) {
     taskError(res, error);
     return true;
   }
+};
 }
+
+export const handleTaskApi = createTaskApiHandler({
+  store,
+  orchestrator,
+  registry,
+  plannerStatus: defaultPlannerStatus,
+});
