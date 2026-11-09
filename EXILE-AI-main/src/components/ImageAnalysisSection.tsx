@@ -1,134 +1,75 @@
+import { useState } from "react";
+import { Eye, Upload, Loader2 } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { toast } from "sonner";
+import { streamChat, fileToDataUrl } from "@/lib/ai";
+import { logReasoning } from "@/lib/reasoningLog";
 
-import { useState } from 'react';
-import { Search, Upload, Image, Scan, Eye, Zap } from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { ScrollArea } from '@/components/ui/scroll-area';
+const MAX_BYTES = 8 * 1024 * 1024;
+const ALLOWED = ["image/png", "image/jpeg", "image/webp"];
 
-interface AnalysisResult {
-  id: string;
-  type: string;
-  confidence: number;
-  description: string;
-}
-
+/** Vision: sends the chosen image to the configured model and shows its real answer. */
 const ImageAnalysisSection = () => {
-  const [selectedImage, setSelectedImage] = useState<string | null>(null);
-  const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [analysisResults, setAnalysisResults] = useState<AnalysisResult[]>([]);
+  const [image, setImage] = useState<{ name: string; mime: string; dataUrl: string } | null>(null);
+  const [prompt, setPrompt] = useState("Describe this image. Read any visible text exactly and say if something is unclear.");
+  const [output, setOutput] = useState("");
+  const [busy, setBusy] = useState(false);
 
-  const analyzeImage = () => {
-    setIsAnalyzing(true);
-    
-    // Simulate analysis
-    setTimeout(() => {
-      setAnalysisResults([
-        { id: '1', type: 'Object', confidence: 95, description: 'Smartphone device detected' },
-        { id: '2', type: 'Text', confidence: 88, description: 'Screen content readable' },
-        { id: '3', type: 'Color', confidence: 92, description: 'Dominant colors: Blue, Purple' },
-        { id: '4', type: 'Scene', confidence: 85, description: 'Indoor environment' },
-      ]);
-      setIsAnalyzing(false);
-    }, 2000);
+  const onPick = async (file: File | undefined) => {
+    if (!file) return;
+    if (!ALLOWED.includes(file.type)) return toast.error("Choose a PNG, JPEG or WebP image.");
+    if (file.size > MAX_BYTES) return toast.error("That image is larger than 8 MB.");
+    try {
+      setImage({ name: file.name, mime: file.type, dataUrl: await fileToDataUrl(file) });
+      setOutput("");
+    } catch {
+      toast.error("Could not read that image.");
+    }
+  };
+
+  const run = async () => {
+    if (!image || busy) return;
+    setBusy(true);
+    setOutput("");
+    logReasoning("Vision", "analyzing", image.name, 0.9);
+    try {
+      await streamChat(
+        "exile-analyze",
+        { prompt: prompt.trim() || "Describe this image.", attachments: [{ kind: "image", mime: image.mime, name: image.name, dataUrl: image.dataUrl }] },
+        (d) => setOutput((o) => o + d),
+      );
+    } catch (e: unknown) {
+      toast.error((e as { message?: string })?.message || "Analysis failed");
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (
-    <div className="h-96">
-      <div className="p-4 border-b bg-gradient-to-r from-purple-50 to-indigo-50">
-        <h2 className="text-xl font-semibold text-gray-800 flex items-center gap-2">
-          <Search className="w-5 h-5 text-purple-600" />
-          Image Analysis
-        </h2>
-        <p className="text-sm text-gray-600 mt-1">AI-powered image recognition</p>
+    <div className="p-4 space-y-4 bg-slate-950 text-cyan-100 min-h-[28rem]">
+      <div className="flex items-center gap-2">
+        <Eye className="w-4 h-4 text-cyan-300" />
+        <h2 className="text-sm tracking-widest">VISION</h2>
       </div>
-
-      <div className="p-4 space-y-4">
-        {/* Upload Area */}
-        <Card className="border-2 border-dashed border-gray-300 hover:border-purple-400 transition-colors cursor-pointer">
-          <CardContent className="p-6 text-center">
-            {selectedImage ? (
-              <div className="space-y-3">
-                <div className="w-16 h-16 bg-purple-100 rounded-lg flex items-center justify-center mx-auto">
-                  <Image className="w-8 h-8 text-purple-600" />
-                </div>
-                <p className="text-sm text-gray-600">Image ready for analysis</p>
-              </div>
-            ) : (
-              <div className="space-y-3">
-                <Upload className="w-16 h-16 text-gray-400 mx-auto" />
-                <div>
-                  <p className="text-sm text-gray-600">Upload an image to analyze</p>
-                  <p className="text-xs text-gray-500 mt-1">PNG, JPG, GIF up to 10MB</p>
-                </div>
-              </div>
-            )}
-          </CardContent>
-        </Card>
-
-        {/* Analysis Controls */}
-        <div className="flex gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setSelectedImage('demo')}
-            className="flex-1"
-          >
-            <Upload className="w-4 h-4 mr-2" />
-            Upload
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={analyzeImage}
-            disabled={!selectedImage || isAnalyzing}
-            className="flex-1"
-          >
-            {isAnalyzing ? (
-              <Zap className="w-4 h-4 mr-2 animate-spin" />
-            ) : (
-              <Scan className="w-4 h-4 mr-2" />
-            )}
-            {isAnalyzing ? 'Analyzing...' : 'Analyze'}
-          </Button>
-        </div>
-
-        {/* Results */}
-        {analysisResults.length > 0 && (
-          <ScrollArea className="h-32">
-            <div className="space-y-2">
-              <h3 className="font-medium text-gray-800 text-sm flex items-center gap-2">
-                <Eye className="w-4 h-4" />
-                Analysis Results
-              </h3>
-              {analysisResults.map((result) => (
-                <Card key={result.id} className="bg-gray-50">
-                  <CardHeader className="pb-2">
-                    <CardTitle className="text-xs flex items-center justify-between">
-                      <span className="text-purple-600">{result.type}</span>
-                      <span className="text-gray-500">{result.confidence}%</span>
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent className="pt-0">
-                    <p className="text-xs text-gray-600">{result.description}</p>
-                  </CardContent>
-                </Card>
-              ))}
-            </div>
-          </ScrollArea>
-        )}
-
-        {/* Analysis Features */}
-        <div className="grid grid-cols-2 gap-2">
-          <Button variant="outline" size="sm" className="text-xs">
-            <Scan className="w-3 h-3 mr-1" />
-            OCR Text
-          </Button>
-          <Button variant="outline" size="sm" className="text-xs">
-            <Eye className="w-3 h-3 mr-1" />
-            Objects
-          </Button>
-        </div>
+      <p className="text-[11px] text-cyan-400/70">
+        Sends your image to the configured AI model and shows its answer. It needs a provider that can read images; the answer is the model's, not a guaranteed fact.
+      </p>
+      <div className="flex gap-2 items-center flex-wrap">
+        <label className="flex items-center gap-2 cursor-pointer bg-cyan-500/15 border border-cyan-400/40 px-3 py-2 rounded text-xs tracking-widest hover:bg-cyan-500/25">
+          <Upload className="w-4 h-4" /> CHOOSE IMAGE
+          <input type="file" accept="image/png,image/jpeg,image/webp" className="hidden" aria-label="Choose image" onChange={(e) => { void onPick(e.target.files?.[0]); e.target.value = ""; }} />
+        </label>
+        {image && <span className="text-[11px] text-cyan-300/80 truncate max-w-xs">{image.name}</span>}
       </div>
+      {image && <img src={image.dataUrl} alt="Selected for analysis" className="max-h-56 rounded border border-cyan-500/30" />}
+      <div className="flex gap-2">
+        <Input value={prompt} onChange={(e) => setPrompt(e.target.value)} aria-label="What to look for" className="bg-slate-900 border-cyan-500/30 text-cyan-100" />
+        <Button onClick={run} disabled={!image || busy} className="bg-cyan-500/20 border border-cyan-400/40 text-cyan-100 hover:bg-cyan-500/30">
+          {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : "Analyze"}
+        </Button>
+      </div>
+      {output && <pre className="whitespace-pre-wrap text-xs bg-slate-900/60 border border-cyan-500/20 rounded p-3 max-h-72 overflow-auto" aria-label="Analysis result">{output}</pre>}
     </div>
   );
 };

@@ -28,3 +28,5 @@ electron-release/
 .env
 .env.*
 !.env.example
+
+electron-release-optimized/

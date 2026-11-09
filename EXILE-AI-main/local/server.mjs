@@ -47,6 +47,7 @@ import { arcConnectivity } from "./arc-connectivity.mjs";
 import { arcAutonomyEngine } from "./arc-autonomy-engine.mjs";
 import { listEligibleProcesses, terminateSelectedProcess } from "./arc-process-manager.mjs";
 import { handleTaskApi } from "./task-api.mjs";
+import { buildAnalyzeMessages, AnalyzeRequestError } from "./analyze-request.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const DATA_DIR = process.env.EXILE_DATA_DIR
@@ -1368,7 +1369,18 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (url.pathname === "/keys") return json(res, 200, saveKeys(body));
-    if (url.pathname === "/exile-chat" || url.pathname === "/exile-analyze") return handleChat(body, res);
+    if (url.pathname === "/exile-chat") return handleChat(body, res);
+    if (url.pathname === "/exile-analyze") {
+      // Convert { prompt, attachments } into real messages; never drop the user's files silently.
+      let messages;
+      try {
+        messages = buildAnalyzeMessages(body);
+      } catch (e) {
+        if (e instanceof AnalyzeRequestError) return json(res, 400, { error: e.message });
+        throw e;
+      }
+      return handleChat({ ...body, messages }, res);
+    }
     if (url.pathname === "/exile-image") return handleImage(body, res);
     return json(res, 404, { error: "Not found" });
   } catch (e) {

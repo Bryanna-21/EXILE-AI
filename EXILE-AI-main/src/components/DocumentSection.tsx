@@ -5,8 +5,11 @@ import { Input } from "@/components/ui/input";
 import { streamChat, fileToDataUrl } from "@/lib/ai";
 import { toast } from "sonner";
 import { logReasoning } from "@/lib/reasoningLog";
+import { extractPdfText } from "@/lib/pdfText";
 
-type Att = { kind: "image" | "file"; mime: string; dataUrl: string; name: string };
+// extractedText is read in the browser (PDF text layer / plain text) so it works with the
+// local server, which cannot parse files itself. dataUrl is kept for the hosted backend.
+type Att = { kind: "image" | "file"; mime: string; dataUrl: string; name: string; extractedText?: string };
 
 const DocumentSection = () => {
   const [prompt, setPrompt] = useState("Summarize this and extract key facts, dates and action items.");
@@ -18,12 +21,26 @@ const DocumentSection = () => {
     if (!files) return;
     const next: Att[] = [];
     for (const f of Array.from(files)) {
-      const dataUrl = await fileToDataUrl(f);
-      next.push({
-        kind: f.type.startsWith("image/") ? "image" : "file",
-        mime: f.type || "application/octet-stream",
-        dataUrl, name: f.name,
-      });
+      try {
+        const dataUrl = await fileToDataUrl(f);
+        const att: Att = {
+          kind: f.type.startsWith("image/") ? "image" : "file",
+          mime: f.type || "application/octet-stream",
+          dataUrl, name: f.name,
+        };
+        const isPdf = f.type === "application/pdf" || /\.pdf$/i.test(f.name);
+        if (isPdf) {
+          const pdf = await extractPdfText(f);
+          if (pdf.text.trim()) att.extractedText = pdf.text;
+          else toast.info(`${f.name}: no selectable text found. Scanned PDFs need OCR, which EXILE does not do.`);
+          if (pdf.truncated) toast.info(`${f.name}: only the first part of this PDF is analysed.`);
+        } else if (att.kind === "file") {
+          att.extractedText = (await f.text()).slice(0, 60000);
+        }
+        next.push(att);
+      } catch {
+        toast.error(`Could not read ${f.name}.`);
+      }
     }
     setAtts((prev) => [...prev, ...next]);
   };

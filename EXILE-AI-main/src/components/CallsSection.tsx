@@ -26,7 +26,7 @@ const CallsSection = () => {
       setActive(kind);
       setElapsed(0);
       timerRef.current = setInterval(() => setElapsed((s) => s + 1), 1000);
-      toast.success(`${kind === "video" ? "Video" : "Voice"} channel established.`);
+      toast.info(`${kind === "video" ? "Camera and microphone" : "Microphone"} test started. Nobody else is connected.`);
     } catch (e) {
       toast.error("Unable to access microphone/camera.");
     }
@@ -59,11 +59,14 @@ const CallsSection = () => {
       <div className="p-4 border-b border-cyan-500/30 flex items-center justify-between">
         <h2 className="text-lg font-semibold tracking-widest flex items-center gap-2">
           <Phone className="w-4 h-4 text-cyan-300" />
-          SECURE CHANNEL
+          DEVICE CHECK
         </h2>
-        <span className="text-[10px] tracking-widest text-cyan-400/70">WebRTC // P2P READY</span>
+        <span className="text-[10px] tracking-widest text-cyan-400/70">LOCAL PREVIEW · NO REMOTE CALLING</span>
       </div>
 
+      <p className="px-4 py-2 text-[11px] text-cyan-400/70 border-b border-cyan-500/20">
+        This only previews your own microphone and camera. EXILE cannot place calls to other people: there is no signalling or remote connection.
+      </p>
       <div className="flex-1 relative flex items-center justify-center bg-slate-950 overflow-hidden">
         {active === "video" && !camOff ? (
           <video ref={videoRef} className="w-full h-full object-cover" muted playsInline />
@@ -77,7 +80,7 @@ const CallsSection = () => {
               )}
             </div>
             <p className="mt-4 text-sm tracking-widest text-cyan-300/80">
-              {active ? `${active === "video" ? "VIDEO" : "VOICE"} CALL · ${mm}:${ss}` : "STANDING BY"}
+              {active ? `${active === "video" ? "CAMERA" : "MICROPHONE"} TEST · ${mm}:${ss}` : "STANDING BY"}
             </p>
           </div>
         )}
@@ -85,7 +88,7 @@ const CallsSection = () => {
         {/* HUD overlay */}
         {active && (
           <div className="absolute top-3 left-3 text-[10px] tracking-widest text-cyan-300/80 font-mono bg-slate-900/60 border border-cyan-500/30 px-2 py-1 rounded">
-            ● LIVE · {mm}:{ss}
+            ● LOCAL PREVIEW · {mm}:{ss}
           </div>
         )}
       </div>
@@ -94,24 +97,24 @@ const CallsSection = () => {
         {!active ? (
           <>
             <Button onClick={() => start("voice")} className="bg-cyan-500/20 border border-cyan-400/40 hover:bg-cyan-500/30 text-cyan-100">
-              <Phone className="w-4 h-4 mr-2" /> Voice Call
+              <Phone className="w-4 h-4 mr-2" /> Test microphone
             </Button>
             <Button onClick={() => start("video")} className="bg-cyan-500/20 border border-cyan-400/40 hover:bg-cyan-500/30 text-cyan-100">
-              <Video className="w-4 h-4 mr-2" /> Video Call
+              <Video className="w-4 h-4 mr-2" /> Test camera
             </Button>
           </>
         ) : (
           <>
-            <Button onClick={toggleMute} variant="outline" className="border-cyan-500/30 text-cyan-100 hover:bg-cyan-500/10">
+            <Button onClick={toggleMute} variant="outline" className="border-cyan-500/30 bg-transparent text-cyan-100 hover:bg-cyan-500/10">
               {muted ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
             </Button>
             {active === "video" && (
-              <Button onClick={toggleCam} variant="outline" className="border-cyan-500/30 text-cyan-100 hover:bg-cyan-500/10">
+              <Button onClick={toggleCam} variant="outline" className="border-cyan-500/30 bg-transparent text-cyan-100 hover:bg-cyan-500/10">
                 {camOff ? <VideoOff className="w-4 h-4" /> : <Video className="w-4 h-4" />}
               </Button>
             )}
             <Button onClick={end} className="bg-red-500/80 hover:bg-red-500 text-white">
-              <PhoneOff className="w-4 h-4 mr-2" /> End
+              <PhoneOff className="w-4 h-4 mr-2" /> Stop
             </Button>
           </>
         )}

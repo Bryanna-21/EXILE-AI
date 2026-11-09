@@ -1,5 +1,6 @@
-const { app, BrowserWindow, shell, ipcMain } = require("electron");
+const { app, BrowserWindow, shell, ipcMain, dialog } = require("electron");
 const path = require("node:path");
+const { registerNativeAppIpc } = require("./native-apps/index.cjs");
 const fs = require("node:fs");
 const { spawn } = require("node:child_process");
 const os = require("node:os");
@@ -351,6 +352,13 @@ if (!gotTheLock) {
   });
 
   app.whenReady().then(async () => {
+    // Native application import/launch: main-process only, narrow IPC surface.
+    try {
+      registerNativeAppIpc({ ipcMain, app, dialog, shell, BrowserWindow });
+    } catch (error) {
+      console.error("[EXILE] Native application support failed to start:", error.message);
+    }
+
     const apiReady = await startLocalApi();
     if (!apiReady) {
       console.error(

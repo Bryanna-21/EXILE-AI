@@ -3,7 +3,9 @@ import { Plus, Trash2, ExternalLink } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
-import { ExileApp, listApps, addApp, removeApp, launchApp } from "@/lib/appRegistry";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import NativeAppsPanel from "@/components/apps/NativeAppsPanel";
+import { ExileApp, listApps, addApp, removeApp, launchApp, linkProblem } from "@/lib/appRegistry";
 
 const AppsSection = () => {
   const [apps, setApps] = useState<ExileApp[]>([]);
@@ -16,6 +18,8 @@ const AppsSection = () => {
   const add = () => {
     if (!name.trim() || !url.trim()) return toast.error("Name and link are required.");
     const normalized = /^[a-z][a-z0-9+.-]*:/i.test(url.trim()) ? url.trim() : `https://${url.trim()}`;
+    const problem = linkProblem(normalized);
+    if (problem) return toast.error(problem);
     addApp({ name: name.trim(), url: normalized, emoji: emoji || "🛰" });
     setApps(listApps());
     setName(""); setUrl("");
@@ -23,13 +27,19 @@ const AppsSection = () => {
   };
 
   return (
-    <div className="p-4 space-y-5 text-cyan-100">
+    <div className="p-4 space-y-4 text-cyan-100">
       <div>
-        <h3 className="text-sm tracking-[0.3em] text-cyan-300">APP REGISTRY</h3>
         <p className="text-xs text-cyan-400/60 mt-1">
-          Add any app or deep link (https://, mailto:, spotify:, tel:) and launch it from EXILE.
+          Desktop apps are programs on this computer and open in their own windows. Web links open in your browser.
         </p>
       </div>
+      <Tabs defaultValue="desktop">
+        <TabsList className="bg-slate-900/60 border border-cyan-500/20">
+          <TabsTrigger value="desktop">Desktop apps</TabsTrigger>
+          <TabsTrigger value="web">Web links</TabsTrigger>
+        </TabsList>
+        <TabsContent value="desktop" className="mt-3"><NativeAppsPanel /></TabsContent>
+        <TabsContent value="web" className="mt-3 space-y-5">
 
       <div className="rounded-md border border-cyan-500/25 bg-slate-900/60 p-4 space-y-3">
         <div className="flex gap-2">
@@ -59,7 +69,7 @@ const AppsSection = () => {
             key={a.id}
             className="relative rounded-md border border-cyan-500/20 bg-slate-900/50 p-3 text-center"
           >
-            <button onClick={() => launchApp(a)} className="w-full">
+            <button onClick={() => { const r = launchApp(a); if (!r.ok) toast.error(r.message ?? "Could not open this link."); }} className="w-full">
               <div className="text-2xl">{a.emoji}</div>
               <div className="text-[10px] mt-1 truncate text-cyan-200">{a.name}</div>
               <ExternalLink className="w-3 h-3 mx-auto mt-1 text-cyan-400/50" />
@@ -77,6 +87,8 @@ const AppsSection = () => {
           <p className="col-span-3 text-xs text-cyan-400/50">No apps added yet.</p>
         )}
       </div>
+        </TabsContent>
+      </Tabs>
     </div>
   );
 };

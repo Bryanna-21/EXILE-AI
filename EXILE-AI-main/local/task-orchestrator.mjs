@@ -222,12 +222,24 @@ export class TaskOrchestrator {
       if (!task.plan) {
         this._setStatus(task, "planning", "Planning execution steps…");
         task = this._mustGet(taskId);
-        const plan = await createPlan({
-          objective: task.objective,
-          registry: this.registry,
-          callModel: (messages) => this.callModel(messages),
-          memoryNotes: this._memoryNotesText(),
-        });
+        let plan;
+        try {
+          plan = await createPlan({
+            objective: task.objective,
+            registry: this.registry,
+            callModel: (messages) => this.callModel(messages),
+            memoryNotes: this._memoryNotesText(),
+          });
+        } catch (e) {
+          // The reasoning provider itself failed (no key configured, network down, ...).
+          // Report it as a planning failure the operator can act on, not an internal fault.
+          this._checkControls(control); // honour a cancel/pause/timeout that arrived meanwhile
+          task = this._mustGet(taskId);
+          const reason = String(e?.message ?? e).slice(0, 300);
+          task.error = { stage: "planning", reason };
+          this._setStatus(task, "failed", `Planning could not run: ${reason}`);
+          return;
+        }
         this._checkControls(control);
         if (plan.planningFailed) {
           task = this._mustGet(taskId);
@@ -304,6 +316,13 @@ export class TaskOrchestrator {
             control.pendingApproval = { requestId, settled: null };
             await this._awaitApproval(control, task.id);
             control.pendingApproval = null;
+            // The operator has answered. Leave waiting_approval now; otherwise the
+            // task would still be in that state when it later tries to complete,
+            // which the state machine rightly rejects (waiting_approval -> completed).
+            task = this._mustGet(taskId);
+            if (task.status === "waiting_approval") {
+              this._setStatus(task, "running", "Approval decision received; continuing.");
+            }
             continue; // re-enter loop; decision now recorded
           }
           if (existing.decision === "refused") {
