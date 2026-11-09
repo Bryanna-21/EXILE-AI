@@ -74,7 +74,8 @@ jobs:
         run: npm ci
 
       - name: Run Windows-compatible native-app tests
-        run: node --test --test-name-pattern="windows executable paths|unsupported platforms|duplicate keys|arguments are split|arguments: rejects|command interpreters|names and categories|store persists|store backs up|store drops|store refuses|discovery reads shortcuts|discovered import|shortcut import|IPC handlers|preload bridge|main process keeps" test/native-apps.test.mjs
+        run: >-
+          node --test --test-name-pattern="windows executable paths|unsupported platforms|duplicate keys|arguments are split|arguments: rejects|command interpreters|names and categories|store persists|store backs up|store drops|store refuses|discovery reads shortcuts|discovered import|shortcut import|IPC handlers|preload bridge|main process keeps" test/native-apps.test.mjs
 
       - name: Run TypeScript checks on Windows
         run: npm run typecheck
