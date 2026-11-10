@@ -1,15 +1,12 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import * as pdfjsLib from 'pdfjs-dist';
 import {
   MessageCircle, Camera, Search, Mic, Files, Share2, Wifi, WifiOff, Activity,
   MessageSquare, Phone, ShieldCheck, Home, Car, LayoutDashboard, Wand2, Film,
-  FileText, BookOpen, Settings, Send, X, AudioLines, Grid3x3, KeyRound,
+  FileText, BookOpen, Settings, X, AudioLines, Grid3x3, KeyRound,
   History, FilePlus2, Radio, Contact2, Menu, Volume2, VolumeX,
-  Paperclip, FileText as AttachmentFileIcon,
 } from 'lucide-react';
 
-import { Button } from '@/components/ui/button';
-import CodeCanvas from '@/components/CodeCanvas';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import CameraSection from '@/components/CameraSection';
 import FilesSection from '@/components/FilesSection';
@@ -47,7 +44,13 @@ import VoiceCommandsSection from '@/components/VoiceCommandsSection';
 import ContactsSection from '@/components/ContactsSection';
 import {
   TranscriptTurn, ChatSession, listTurns, listSessions, getActiveSessionId, openSession, addTurn, updateTurn, addVoiceClip, startNewSession,
+  patchTurn, truncateAfter, restoreTurn, deleteTurn,
 } from '@/lib/conversation';
+import { toast } from 'sonner';
+import { ChatMessages, ChatComposer } from '@/components/chat/ChatScreen';
+import { chatMedia, type ChatFile } from '@/lib/chat/mediaStore';
+import { classifyFile, dataUrlBytes, dataUrlMime, stripAttachmentLabel, withAttachmentLabel } from '@/lib/chat/files';
+import { previousUserTurn, replyPrefix, withReplyContext } from '@/lib/chat/ops';
 import HealthSection from '@/components/HealthSection';
 import AuditSection from '@/components/AuditSection';
 import { runTool, type ToolContext } from '@/lib/tools';
@@ -100,6 +103,7 @@ type ConsoleAttachment = {
   extractedText?: string;
 };
 
+const ATTACHMENT_ACCEPT = 'image/png,image/jpeg,image/webp,application/pdf,text/plain,application/json,.txt,.md,.markdown,.csv,.json,.log,.xml,.yaml,.yml,.toml,.js,.jsx,.ts,.tsx,.py,.html,.css,.sql,.java,.c,.h,.cpp,.hpp,.rs,.go,.sh';
 const MAX_ATTACHMENTS = 5;
 const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
 const MAX_TOTAL_ATTACHMENT_BYTES = 15 * 1024 * 1024;
@@ -113,45 +117,30 @@ const MEDIA_PANELS = new Set(['cinema', 'camera', 'analysis', 'docs', 'files']);
 
 
 
-function renderExileMessage(text: string): ReactNode[] {
-  const pattern = /```([a-zA-Z0-9_+#.-]*)[ \t]*\r?\n([\s\S]*?)```/g;
-  const nodes: ReactNode[] = [];
-  let cursor = 0;
-  let index = 0;
+const toChatFile = (a: ConsoleAttachment): ChatFile => ({
+  id: a.id,
+  name: a.file.name,
+  mime: a.file.type || 'application/octet-stream',
+  size: a.file.size,
+  kind: classifyFile(a.file.name, a.file.type),
+  file: a.file,
+  dataUrl: a.dataUrl,
+  text: a.extractedText,
+  origin: 'attached',
+});
 
-  for (const match of text.matchAll(pattern)) {
-    const start = match.index ?? 0;
+const fromChatFile = (f: ChatFile): ConsoleAttachment | null => {
+  if (!f.file) return null;
+  return {
+    id: f.id,
+    file: f.file instanceof File ? f.file : new File([f.file], f.name, { type: f.mime }),
+    kind: f.kind === 'image' ? 'image' : f.kind === 'pdf' ? 'pdf' : 'text',
+    dataUrl: f.dataUrl,
+    extractedText: f.text,
+  };
+};
 
-    if (start > cursor) {
-      nodes.push(
-          <span key={`text-${index++}`} className="whitespace-pre-wrap">
-            {text.slice(cursor, start)}
-          </span>
-        );
-      }
-
-    const code = match[2].replace(/\r?\n$/, "");
-    if (code.trim()) {
-      nodes.push(
-        <div key={`code-${index++}`} className="my-3 text-left">
-          <CodeCanvas code={code} language={match[1] || undefined} />
-        </div>,
-      );
-    }
-
-    cursor = start + match[0].length;
-  }
-
-  if (cursor < text.length) {
-    nodes.push(
-      <span key={`text-${index++}`} className="whitespace-pre-wrap">
-        {text.slice(cursor)}
-      </span>,
-    );
-  }
-
-  return nodes;
-}
+type AskOptions = { reuse?: TranscriptTurn; replyTo?: string };
 
 const Index = () => {
   const [locked, setLocked] = useState(true);
@@ -171,6 +160,8 @@ const Index = () => {
   const [reply, setReply] = useState('');
   const [attachments, setAttachments] = useState<ConsoleAttachment[]>([]);
   const [attachmentError, setAttachmentError] = useState('');
+  const [generating, setGenerating] = useState(false);
+  const [replyTo, setReplyTo] = useState<TranscriptTurn | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [muted, setMuted] = useState<boolean>(() => {
     try {
@@ -194,7 +185,8 @@ const Index = () => {
   const [level, setLevel] = useState(0);
   const recRef = useRef<any>(null);
   const meterRef = useRef<LevelMeter | null>(null);
-  const feedRef = useRef<HTMLDivElement | null>(null);
+  const composerRef = useRef<HTMLTextAreaElement | null>(null);
+  const generatingRef = useRef(false);
   const mediaRef = useRef<MediaRecorder | null>(null);
   const clipRef = useRef<BlobPart[]>([]);
   const lastAudio = useRef<string | undefined>(undefined);
@@ -276,10 +268,6 @@ const Index = () => {
   }, []);
 
   useEffect(() => {
-    feedRef.current?.scrollTo({ top: feedRef.current.scrollHeight, behavior: 'smooth' });
-  }, [turns, reply]);
-
-  useEffect(() => {
     if (!imageFullscreen) return;
 
     const handleEscape = (event: KeyboardEvent) => {
@@ -291,7 +279,7 @@ const Index = () => {
   }, [imageFullscreen]);
 
 
-  const generateConsoleImage = async (prompt: string): Promise<boolean> => {
+  const generateConsoleImage = async (prompt: string, turnId?: string): Promise<boolean> => {
     setImageGenerating(true);
     setImageError('');
 
@@ -303,6 +291,14 @@ const Index = () => {
         image.onload = () => {
           setGeneratedImage({ dataUrl, prompt });
           rememberGeneratedImage(dataUrl, prompt);
+          if (turnId) {
+            const mime = dataUrlMime(dataUrl);
+            chatMedia.append(turnId, {
+              id: crypto.randomUUID(),
+              name: `exile-image-${Date.now()}.${mime === 'image/jpeg' ? 'jpg' : mime === 'image/webp' ? 'webp' : 'png'}`,
+              mime, size: dataUrlBytes(dataUrl), kind: 'image', dataUrl, origin: 'generated', prompt,
+            });
+          }
           setImageError('');
         };
         image.onerror = () => {
@@ -510,27 +506,34 @@ const Index = () => {
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
-  const ask = async (text: string, audio?: string, attached: ConsoleAttachment[] = []) => {
-    if (!text.trim() && !attached.length) return;
-    const directive = text.trim() || 'Please inspect and summarize the attached file(s).';
+  const runAsk = async (text: string, audio?: string, attached: ConsoleAttachment[] = [], opts: AskOptions = {}) => {
+    const reuse = opts.reuse;
+    if (!reuse && !text.trim() && !attached.length) return;
+    const directive = (reuse ? stripAttachmentLabel(reuse.text).text : text).trim() || 'Please inspect and summarize the attached file(s).';
     const attachmentLabels = attached.length
       ? `\n\n[Attached files: ${attached.map((item) => item.file.name).join(', ')}]`
       : '';
-    const userTurnText = `${directive}${attachmentLabels}`;
+    const userTurnText = reuse ? reuse.text : `${directive}${attachmentLabels}`;
     const extracted = attached
       .filter((item) => item.extractedText)
       .map((item) => `\n\n[Attached file: ${item.file.name}]\n${item.extractedText}`)
       .join('');
-    const promptWithFiles = `${directive}${extracted}`.slice(0, MAX_COMBINED_PROMPT);
+    const filesPrompt = `${directive}${extracted}`;
     const imageAttachments = attached.filter((item) => item.kind === 'image' && item.dataUrl);
-    setInput('');
-    setAttachments([]);
-    setAttachmentError('');
+    const replyToId = opts.replyTo;
+    if (!reuse) {
+      setInput('');
+      setAttachments([]);
+      setAttachmentError('');
+      setReplyTo(null);
+    }
     setReply('');
     stopMeter();
     setState('thinking');
 
-    const userTurn = addTurn('user', userTurnText);
+    const userTurn = reuse ?? addTurn('user', userTurnText, replyToId ? { replyTo: replyToId } : {});
+    if (!reuse && attached.length) chatMedia.set(userTurn.id, attached.map(toChatFile));
+    const promptWithFiles = `${replyPrefix(userTurn, listTurns())}${filesPrompt}`.slice(0, MAX_COMBINED_PROMPT);
     if (audio !== undefined) {
       addVoiceClip({ id: crypto.randomUUID(), audio, transcript: directive, at: Date.now() });
     }
@@ -540,7 +543,7 @@ const Index = () => {
     if (!attached.length && (/\b(generate|create|make|draw|paint|design)\b.{0,100}\b(image|picture|artwork|illustration|logo|wallpaper|portrait|icon)\b/i.test(directive)
       || /\b(image|picture|artwork|illustration|logo|wallpaper)\b.{0,60}\b(of|showing|featuring)\b/i.test(directive)
       || /\b(draw|paint)\b/i.test(directive))) {
-      const succeeded = await generateConsoleImage(directive);
+      const succeeded = await generateConsoleImage(directive, exileTurn.id);
       const result = succeeded
         ? 'Image generated successfully in the Console.'
         : 'Image generation failed. See the image error displayed in the Console.';
@@ -554,8 +557,9 @@ const Index = () => {
     const agent = routeToAgent(directive);
     logReasoning(agent.name, 'Received directive', directive);
 
-    const finish = (t: string) => {
+    const finish = (t: string, local = false) => {
       updateTurn(exileTurn.id, t);
+      if (local) patchTurn(exileTurn.id, { fallback: true });
       setReply(t);
       say(t);
     };
@@ -564,18 +568,19 @@ const Index = () => {
       if (imageAttachments.length) {
         return finish('Image analysis requires an online AI provider with vision support. The attached image was not analyzed.');
       }
-      return finish(offlineRespond(promptWithFiles).text);
+      return finish(offlineRespond(filesPrompt).text, true);
     }
 
+    const history = listTurns();
     const convo: Record<string, unknown>[] = [
       ...(memoryContext() ? [{ role: 'system', content: memoryContext() }] : []),
       { role: 'system', content: getExilePersonalityPrompt(isVenomModeEnabled()) },
       { role: 'system', content: `Active agent: ${agent.name}. ${agent.systemPrompt}` },
-      ...listTurns()
+      ...history
         .slice(-20)
         .filter((t) => t.text && t.text !== '…' && t.id !== exileTurn.id)
         .map((t) => {
-          if (t.id !== userTurn.id) return { role: t.role === 'user' ? 'user' : 'assistant', content: t.text };
+          if (t.id !== userTurn.id) return { role: t.role === 'user' ? 'user' : 'assistant', content: withReplyContext(t, history) };
           const contentText = promptWithFiles;
           const content = imageAttachments.length
             ? [
@@ -591,7 +596,7 @@ const Index = () => {
       openSection: (id) => setPanel(id),
       approve: (summary) => new Promise<boolean>((resolve) => setPending({ summary, resolve })),
       generateImage: (prompt) => {
-        void generateConsoleImage(prompt);
+        void generateConsoleImage(prompt, exileTurn.id);
       },
     };
 
@@ -642,9 +647,63 @@ const Index = () => {
       if (imageAttachments.length) {
         finish(`I couldn't analyze the attached image. Check that your online provider and selected model support vision. (${reason})`);
       } else {
-        finish(`${offlineRespond(promptWithFiles).text}\n\n— cloud link unavailable (${reason}); answered locally.`);
+        finish(`${offlineRespond(filesPrompt).text}\n\n— cloud link unavailable (${reason}); answered locally.`, true);
       }
     }
+  };
+
+  /** One reply at a time: a second message while EXILE is answering is declined, not interleaved. */
+  const ask = async (text: string, audio?: string, attached: ConsoleAttachment[] = [], opts: AskOptions = {}) => {
+    if (generatingRef.current) {
+      toast.info('EXILE is still replying. Wait for it to finish.');
+      return;
+    }
+    generatingRef.current = true;
+    setGenerating(true);
+    try {
+      await runAsk(text, audio, attached, opts);
+    } finally {
+      generatingRef.current = false;
+      setGenerating(false);
+    }
+  };
+
+  const sendFromComposer = () => void ask(input, undefined, attachments, { replyTo: replyTo?.id });
+
+  /** Re-run EXILE's answer to an existing user message; everything after that message is replaced. */
+  const rerunFrom = (userTurnId: string) => {
+    if (generatingRef.current) return;
+    const target = listTurns().find((t) => t.id === userTurnId);
+    if (!target) return;
+    const removed = truncateAfter(target.id);
+    chatMedia.delete(removed.map((t) => t.id));
+    const { names } = stripAttachmentLabel(target.text);
+    const files = chatMedia.get(target.id).filter((f) => f.origin === 'attached').map(fromChatFile).filter((f): f is ConsoleAttachment => !!f);
+    if (names.length > files.length) toast.info('Some attachments are no longer available (they are not kept after a reload). Only the text was resent.');
+    void ask('', undefined, files, { reuse: target });
+  };
+
+  const onEditSave = (id: string, text: string) => {
+    const target = listTurns().find((t) => t.id === id);
+    if (!target || generatingRef.current) return;
+    patchTurn(id, { text: withAttachmentLabel(text, stripAttachmentLabel(target.text).names), edited: true });
+    rerunFrom(id);
+  };
+
+  const onRegenerate = (exileId: string) => {
+    const source = previousUserTurn(listTurns(), exileId);
+    if (source) rerunFrom(source.id);
+  };
+
+  const onDeleteTurn = (id: string) => {
+    if (generatingRef.current) return;
+    const all = listTurns();
+    const index = all.findIndex((t) => t.id === id);
+    const turn = all[index];
+    if (!turn) return;
+    deleteTurn(id);
+    if (replyTo?.id === id) setReplyTo(null);
+    toast('Message deleted', { duration: 7000, action: { label: 'Undo', onClick: () => restoreTurn(turn, index) } });
   };
 
   const listen = async () => {
@@ -707,6 +766,8 @@ const Index = () => {
     startNewSession();
     setInput("");
     setReply("");
+    setReplyTo(null);
+    chatMedia.clear();
     setTurns([]);
     setGeneratedImage(null);
     setImageError("");
@@ -939,43 +1000,20 @@ const Index = () => {
             <div className="mt-2 text-center text-[8px] tracking-[0.2em] text-cyan-300/60">SYSTEM STATUS · {online ? 'CONNECTED' : 'LOCAL MODE'} · {time.toLocaleDateString()}</div>
           </section>
         )}
-        <div
-          ref={feedRef}
-          className="w-full max-w-4xl min-h-0 flex-1 overflow-y-auto px-2 space-y-4"
-        >
-          {turns.length === 0 ? (
-            <p className="text-center text-[10px] tracking-[0.4em] text-cyan-400/50">
-              {state === 'listening' ? 'LISTENING…' : state === 'thinking' ? 'PROCESSING…' : 'EXILE STANDING BY'}
-            </p>
-          ) : (
-            turns.map((t) => (
-              <div key={t.id} className={`exile-message-enter ${t.role === 'user' ? 'ml-auto max-w-[88%] text-right' : 'mr-auto max-w-[95%]'}`}>
-                <div className="text-[9px] tracking-[0.3em] text-cyan-400/50 mb-1">
-                  {t.role === 'user' ? 'YOU' : 'EXILE'}
-                </div>
-                <div
-                  className={`text-base sm:text-lg leading-8 whitespace-pre-wrap ${
-                    t.role === 'user' ? 'text-cyan-300/85' : 'text-cyan-100/90'
-                  }`}
-                >
-                  {t.role === 'user' ? (
-                    <span>{t.text}</span>
-                  ) : (
-                    renderExileMessage(t.text)
-                  )}
-                </div>
-              </div>
-            ))
-          )}
+        <ChatMessages
+          turns={turns}
+          busy={generating}
+          emptyLabel={state === 'listening' ? 'LISTENING…' : state === 'thinking' ? 'PROCESSING…' : 'EXILE STANDING BY'}
+          statusLabel={state === 'listening' ? 'LISTENING…' : state === 'speaking' ? 'SPEAKING…' : undefined}
+          onReply={setReplyTo}
+          onEditSave={onEditSave}
+          onResend={rerunFrom}
+          onRegenerate={onRegenerate}
+          onDelete={onDeleteTurn}
+        />
 
-          {turns.length > 0 && state !== 'idle' && (
-            <p className="text-center text-[10px] tracking-[0.4em] text-cyan-400/50">
-              {state === 'listening' ? 'LISTENING…' : state === 'thinking' ? 'PROCESSING…' : 'SPEAKING…'}
-            </p>
-          )}
-        </div>
-
-        {(imageGenerating || imageError || generatedImage) && (
+        {/* Finished images now live in the conversation; this panel shows progress and errors. */}
+        {(imageGenerating || imageError) && (
           <section className="mx-auto w-full max-w-3xl overflow-hidden rounded-xl border border-[#c4a253]/45 bg-[#080907] p-3 text-[#f5edda] shadow-[0_0_24px_rgba(196,162,83,0.08)]">
             <div className="mb-3 flex items-center justify-between gap-3">
               <div className="min-w-0">
@@ -1068,41 +1106,23 @@ const Index = () => {
             })}
           </div>
         )}
-        {attachments.length > 0 && (
-          <div className="mx-auto mb-2 flex max-w-xl flex-wrap gap-2" aria-label="Attached files">
-            {attachments.map((item) => (
-              <div key={item.id} title={item.file.name} className="flex max-w-full items-center gap-2 rounded-lg border border-[#c4a253]/50 bg-[#080907] px-2 py-1 text-xs text-[#f5edda]">
-                {item.kind === 'image' ? <Camera className="h-3.5 w-3.5 text-[#e0c478]" /> : <AttachmentFileIcon className="h-3.5 w-3.5 text-[#e0c478]" />}
-                <span className="max-w-48 truncate">{item.file.name}</span>
-                <button type="button" aria-label={`Remove ${item.file.name}`} title={`Remove ${item.file.name}`} onClick={() => setAttachments((current) => current.filter((entry) => entry.id !== item.id))} className="text-[#e0c478] hover:text-red-300">
-                  <X className="h-3.5 w-3.5" />
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
-        {attachmentError && <p role="status" className="mx-auto mb-2 max-w-xl text-xs text-amber-300">{attachmentError}</p>}
-        <form
-          onSubmit={(e) => { e.preventDefault(); void ask(input, undefined, attachments); }}
-          className="mx-auto flex w-full max-w-4xl items-center gap-2 rounded-xl border border-cyan-500/35 bg-slate-950/90 px-3 py-2 shadow-[0_0_30px_rgba(34,211,238,0.15)] backdrop-blur-xl"
-        >
-          <input ref={fileInputRef} type="file" multiple className="hidden" accept="image/png,image/jpeg,image/webp,application/pdf,text/plain,application/json,.txt,.md,.markdown,.csv,.json,.log,.xml,.yaml,.yml,.toml,.js,.jsx,.ts,.tsx,.py,.html,.css,.sql,.java,.c,.h,.cpp,.hpp,.rs,.go,.sh" onChange={(event) => void handleFiles(event.target.files)} />
-          <button type="button" onClick={() => fileInputRef.current?.click()} disabled={attachments.length >= MAX_ATTACHMENTS} className="text-[#e0c478] hover:text-[#f5edda] disabled:opacity-40" aria-label="Attach files" title="Attach files">
-            <Paperclip className="h-4 w-4" />
-          </button>
-          <button type="button" onClick={listen} className="text-cyan-300/80 hover:text-cyan-100" aria-label="Voice input">
-            <Mic className="w-4 h-4" />
-          </button>
-          <input
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            placeholder="Speak or type a directive…"
-            className="flex-1 bg-transparent outline-none text-sm placeholder:text-cyan-500/40 text-cyan-50"
-          />
-          <Button type="submit" disabled={!input.trim() && attachments.length === 0} size="icon" variant="ghost" className="h-8 w-8 rounded-full text-cyan-300 hover:bg-cyan-500/15">
-            <Send className="w-4 h-4" />
-          </Button>
-        </form>
+        <ChatComposer
+          value={input}
+          onChange={setInput}
+          onSend={sendFromComposer}
+          busy={generating}
+          attachments={attachments.map((a) => ({ id: a.id, name: a.file.name, size: a.file.size, kind: a.kind, dataUrl: a.dataUrl }))}
+          onRemoveAttachment={(id) => setAttachments((current) => current.filter((entry) => entry.id !== id))}
+          onPickFiles={(files) => void handleFiles(files)}
+          maxAttachments={MAX_ATTACHMENTS}
+          accept={ATTACHMENT_ACCEPT}
+          attachmentError={attachmentError}
+          onMic={listen}
+          replyTo={replyTo}
+          onCancelReply={() => setReplyTo(null)}
+          inputRef={composerRef}
+          fileInputRef={fileInputRef}
+        />
         <p className="mt-1 text-center text-[8px] tracking-[0.2em] text-cyan-500/40">
           EXILE // YOUR AI · YOUR PC · YOUR RULES
         </p>
