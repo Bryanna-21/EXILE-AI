@@ -1,0 +1,46 @@
+const { chromium } = require('playwright');
+const URL = 'http://127.0.0.1:4177/';
+let failures = 0;
+const check = (c, m) => { console.log(`${c ? 'PASS' : 'FAIL'}  ${m}`); if (!c) failures++; };
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+const log = async () => (await fetch('http://127.0.0.1:8799/__log')).json();
+(async () => {
+  const browser = await chromium.launch();
+  const page = await (await browser.newContext({ viewport: { width: 1280, height: 800 } })).newPage();
+  const errors = []; page.on('pageerror', e => errors.push(String(e)));
+  await page.goto(URL); await page.waitForLoadState('networkidle');
+  await page.getByLabel('Unlock with Face ID').click(); await sleep(2600);
+  const box = page.getByLabel('Message', { exact: true });
+  const exiles = page.locator('[data-role=exile]');
+  await box.fill('slowstream please'); await box.press('Enter');
+  const stop = page.getByRole('button', { name: 'Stop generating' });
+  await stop.waitFor({ timeout: 5000 });
+  check(true, 'Stop button appears while a reply is generating');
+  await page.waitForFunction(() => /word3/.test(document.body.innerText), null, { timeout: 8000 });
+  await stop.click();
+  await page.getByRole('button', { name: 'Send message' }).waitFor({ timeout: 3000 });
+  check(true, 'composer returns to Send immediately after Stop');
+  await page.waitForFunction(() => /— stopped/.test(document.body.innerText), null, { timeout: 3000 }).catch(() => {});
+  const text = await exiles.last().getByTestId('message-body').innerText();
+  check(/word0/.test(text) && /stopped/.test(text) && !/word40/.test(text), 'partial text kept and marked stopped: ' + JSON.stringify(text.slice(-30)));
+  await sleep(1200);
+  const after = await exiles.last().getByTestId('message-body').innerText();
+  check(after === text, 'no further text arrives after Stop');
+  const l = await log();
+  check(l.some(e => e.fn === 'slow-closed-by-client') && !l.some(e => e.fn === 'slow-completed'), 'network read was actually cancelled (server saw client disconnect)');
+  check(!/local reasoning|cloud link unavailable/i.test(after), 'no offline fallback after a deliberate stop');
+  // can send again
+  await box.fill('hello again'); await box.press('Enter');
+  await page.waitForFunction(() => !document.querySelector('button[aria-label="Sending"]') && !document.querySelector('button[aria-label="Stop generating"]'), null, { timeout: 20000 });
+  check(/Reply #/.test(await exiles.last().getByTestId('message-body').innerText()), 'a new message works after Stop');
+  // new conversation mid-run drops the late output
+  await box.fill('slowstream second'); await box.press('Enter');
+  await stop.waitFor(); await page.waitForFunction(() => /word2/.test(document.body.innerText));
+  await page.getByRole('button', { name: /new conversation/i }).first().click().catch(async () => { await page.getByText('New conversation').first().click(); });
+  await sleep(1500);
+  const body = await page.evaluate(() => document.body.innerText);
+  check(!/word5/.test(body), 'starting a new conversation mid-reply discards the stale stream');
+  check(await page.getByRole('button', { name: 'Send message' }).isVisible(), 'busy state released after new conversation');
+  check(errors.length === 0, 'no page errors ' + errors.join('|'));
+  await browser.close(); process.exit(failures ? 1 : 0);
+})();

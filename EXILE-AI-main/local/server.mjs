@@ -20,6 +20,8 @@ import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { detectWhatsAppFileRequest, createWhatsAppFile } from "./whatsapp-file-generation.mjs";
 import { spawn } from "node:child_process";
+import { checkLocalRequest, isLocalOrigin, localAuth, AUTH_HEADER } from "./local-auth.mjs";
+import { streamChatWithProviders } from "./chat-stream.mjs";
 import {
   connectWhatsApp,
   getWhatsAppStatus,
@@ -46,14 +48,19 @@ import { arcSystemCore } from "./arc-system-core.mjs";
 import { arcConnectivity } from "./arc-connectivity.mjs";
 import { arcAutonomyEngine } from "./arc-autonomy-engine.mjs";
 import { listEligibleProcesses, terminateSelectedProcess } from "./arc-process-manager.mjs";
+import { createArcAudit } from "./arc-audit.mjs";
+import { validateKeysRequest, KeyValidationError } from "./keys-validation.mjs";
 import { handleTaskApi } from "./task-api.mjs";
 import { buildAnalyzeMessages, AnalyzeRequestError } from "./analyze-request.mjs";
+import { createFreeProviderPool } from "./provider-pool.mjs";
+import { createWhatsAppProviderRouter } from "./whatsapp-provider-router.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const DATA_DIR = process.env.EXILE_DATA_DIR
   ? path.resolve(process.env.EXILE_DATA_DIR)
   : ROOT;
 const ENV_FILE = path.join(DATA_DIR, ".env");
+const arcAudit = createArcAudit(DATA_DIR);
 
 // ---------- .env loader (no dependencies) ----------
 function loadEnv() {
@@ -110,6 +117,17 @@ const PROVIDERS = [
   { id: "lovable",    key: "LOVABLE_API_KEY",    base: "https://ai.gateway.lovable.dev/v1",      chat: "google/gemini-3.6-flash",     image: "google/gemini-3.1-flash-image" },
 ];
 
+const freeProviderPool = createFreeProviderPool();
+
+const whatsappProviderRouter = createWhatsAppProviderRouter({
+  pool: freeProviderPool,
+  providers: PROVIDERS,
+});
+
+const getWhatsAppProviders = whatsappProviderRouter.getProviders;
+const markWhatsAppProviderFailure = whatsappProviderRouter.markFailure;
+const markWhatsAppProviderSuccess = whatsappProviderRouter.markSuccess;
+
 function available() {
   return PROVIDERS.filter((p) => !!process.env[p.key]);
 }
@@ -127,46 +145,87 @@ function chatOrder() {
 }
 
 // ---------- helpers ----------
-const CORS = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "*",
-  "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
-};
+// CORS is per request: only loopback web origins are echoed back (never "*"), so a
+// foreign web page cannot read responses even if it can reach 127.0.0.1.
+function corsFor(res) {
+  const headers = {
+    "Access-Control-Allow-Headers": `content-type, authorization, apikey, x-client-info, ${AUTH_HEADER}`,
+    "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
+    Vary: "Origin",
+  };
+  if (res.exileOrigin) headers["Access-Control-Allow-Origin"] = res.exileOrigin;
+  return headers;
+}
+
+// Routes that act on the machine, spend provider quota or expose configuration.
+// Static assets and /health stay open so the UI can load and detect the server.
+const PROTECTED_PATHS = new Set(["/keys", "/exile-chat", "/exile-image", "/exile-analyze", "/exile-health"]);
+function isProtectedPath(pathname) {
+  return PROTECTED_PATHS.has(pathname) || pathname.startsWith("/arc/") || pathname.startsWith("/whatsapp");
+}
 
 function json(res, status, data) {
-  res.writeHead(status, { ...CORS, "Content-Type": "application/json" });
+  res.writeHead(status, { ...corsFor(res), "Content-Type": "application/json" });
   res.end(JSON.stringify(data));
 }
 
+const MAX_BODY_BYTES = 25 * 1024 * 1024;
+
 function readBody(req) {
   return new Promise((resolve, reject) => {
-    let raw = "";
+    const chunks = [];
+    let size = 0;
+    let rejected = false;
     req.on("data", (c) => {
-      raw += c;
-      if (raw.length > 25 * 1024 * 1024) reject(new Error("Payload too large"));
+      if (rejected) return;
+      size += c.length;
+      if (size > MAX_BODY_BYTES) {
+        rejected = true;
+        chunks.length = 0; // stop buffering; the connection is closed below
+        reject(Object.assign(new Error("Payload too large"), { statusCode: 413 }));
+        req.destroy();
+        return;
+      }
+      chunks.push(c);
     });
     req.on("end", () => {
-      try { resolve(raw ? JSON.parse(raw) : {}); } catch (e) { reject(e); }
+      if (rejected) return;
+      try {
+        const raw = Buffer.concat(chunks).toString("utf8");
+        resolve(raw ? JSON.parse(raw) : {});
+      } catch (e) { reject(Object.assign(new Error("Invalid JSON body"), { statusCode: 400 })); }
     });
     req.on("error", reject);
   });
 }
 
-async function pipeSSE(upstream, res) {
+async function pipeSSE(upstream, res, reader, firstChunk) {
   res.writeHead(200, {
-    ...CORS,
+    ...corsFor(res),
     "Content-Type": "text/event-stream",
     "Cache-Control": "no-cache",
     Connection: "keep-alive",
   });
-  const reader = upstream.body.getReader();
-  const decoder = new TextDecoder();
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    res.write(decoder.decode(value, { stream: true }));
+
+  try {
+    const decoder = new TextDecoder();
+    res.write(decoder.decode(firstChunk, { stream: true }));
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value?.byteLength) {
+        res.write(decoder.decode(value, { stream: true }));
+      }
+    }
+
+    const remaining = decoder.decode();
+    if (remaining) res.write(remaining);
+    res.end();
+  } catch {
+    console.warn("[exile] chat stream interrupted after response began");
+    if (!res.destroyed) res.end();
   }
-  res.end();
 }
 
 const SYSTEM_PROMPT =
@@ -181,15 +240,7 @@ async function generateWhatsAppReply({ name, incomingText }) {
     .trim()
     .toLowerCase();
 
-  const providerOrder = requestedProvider
-    ? [requestedProvider]
-    : process.env.EXILE_GEMINI_FREE_TIER === "true"
-      ? ["gemini", "openrouter"]
-      : ["openrouter"];
-
-  const providers = providerOrder
-    .map((id) => available().find((provider) => provider.id === id))
-    .filter(Boolean);
+  const providers = getWhatsAppProviders(requestedProvider);
 
   if (requestedProvider && providers.length === 0) {
     throw new Error(
@@ -205,10 +256,10 @@ async function generateWhatsAppReply({ name, incomingText }) {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${process.env[provider.key]}`,
+          Authorization: `Bearer ${provider.key}`,
         },
         body: JSON.stringify({
-          model: provider.id === "openrouter" ? "openrouter/free" : provider.chat,
+          model: provider.model || provider.chat,
           stream: false,
           max_tokens: 180,
           temperature: 0.6,
@@ -226,6 +277,7 @@ async function generateWhatsAppReply({ name, incomingText }) {
       });
 
       if (!response.ok) {
+        markWhatsAppProviderFailure(provider, response.status, response.headers?.get?.("retry-after"));
   const errorBody = await response.text().catch(() => "");
   let errorDetail = "";
 
@@ -260,11 +312,14 @@ async function generateWhatsAppReply({ name, incomingText }) {
         : content;
 
       if (typeof reply === "string" && reply.trim()) {
+        markWhatsAppProviderSuccess(provider);
         console.log(`[exile] WhatsApp reply drafted via ${provider.id}`);
         return reply.trim().slice(0, 4000);
       }
+      markWhatsAppProviderFailure(provider, 0);
       errors.push(`${provider.id}: empty response`);
     } catch (error) {
+      markWhatsAppProviderFailure(provider, 0);
       errors.push(`${provider.id}: ${error.message}`);
     }
   }
@@ -276,21 +331,11 @@ async function generateWhatsAppConversationReply({ name, incomingText, history, 
   const requestedProvider = (process.env.EXILE_WHATSAPP_AI_PROVIDER || "")
     .trim()
     .toLowerCase();
-  const freeOrder = process.env.EXILE_GEMINI_FREE_TIER === "true"
-    ? ["gemini", "openrouter"]
-    : ["openrouter"];
   const isMedia = media?.type === "image" || media?.type === "video";
   const fileRequest = !isMedia ? detectWhatsAppFileRequest(incomingText) : null;
-  const configuredProviders = available();
 
-  // Media analysis keeps its existing Gemini-only route. For text and
-  // document generation, an explicit provider overrides the free-tier order.
-  const providerOrder = requestedProvider ? [requestedProvider] : freeOrder;
-  const providers = isMedia
-    ? configuredProviders.filter((provider) => provider.id === "gemini")
-    : providerOrder
-        .map((id) => configuredProviders.find((provider) => provider.id === id))
-        .filter(Boolean);
+  // Text and document requests use rotating credentials. Media stays Gemini-only.
+  const providers = getWhatsAppProviders(requestedProvider, { media: isMedia });
 
   if (!isMedia && requestedProvider && providers.length === 0) {
     throw new Error(
@@ -350,10 +395,10 @@ async function generateWhatsAppConversationReply({ name, incomingText, history, 
           signal: AbortSignal.timeout(30_000),
           headers: {
             "Content-Type": "application/json",
-            Authorization: `Bearer ${process.env[provider.key]}`,
+            Authorization: `Bearer ${provider.key}`,
           },
           body: JSON.stringify({
-            model: provider.id === "openrouter" ? "openrouter/free" : (provider.chat || "gemini-3.8-flash"),
+            model: provider.model || provider.chat || "gemini-3.8-flash",
             stream: false,
             max_tokens: 2400,
             temperature: 0.35,
@@ -362,6 +407,7 @@ async function generateWhatsAppConversationReply({ name, incomingText, history, 
         });
 
         if (!response.ok) {
+        markWhatsAppProviderFailure(provider, response.status, response.headers?.get?.("retry-after"));
           const errorBody = await response.text().catch(() => "");
           let errorDetail = "";
 
@@ -405,16 +451,20 @@ async function generateWhatsAppConversationReply({ name, incomingText, history, 
             /\bI(?:'m| am) unable to\b/i.test(candidate);
 
           if (refusal) {
+                markWhatsAppProviderFailure(provider, 0);
             errors.push(`${provider.id}: refusal returned instead of document content`);
             continue;
           }
 
+          markWhatsAppProviderSuccess(provider);
           documentContent = candidate;
           break;
         }
 
+        markWhatsAppProviderFailure(provider, 0);
         errors.push(`${provider.id}: empty document response`);
       } catch (error) {
+        markWhatsAppProviderFailure(provider, 0);
         errors.push(`${provider.id}: ${error.message}`);
       }
     }
@@ -497,10 +547,10 @@ async function generateWhatsAppConversationReply({ name, incomingText, history, 
         signal: AbortSignal.timeout(30_000),
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${process.env[provider.key]}`,
+          Authorization: `Bearer ${provider.key}`,
         },
         body: JSON.stringify({
-          model: provider.id === "openrouter" ? "openrouter/free" : (provider.chat || "gemini-3.8-flash"),
+          model: provider.model || provider.chat || "gemini-3.8-flash",
           stream: false,
           max_tokens: 900,
           temperature: 0.5,
@@ -509,6 +559,7 @@ async function generateWhatsAppConversationReply({ name, incomingText, history, 
       });
 
       if (!response.ok) {
+        markWhatsAppProviderFailure(provider, response.status, response.headers?.get?.("retry-after"));
         const errorBody = await response.text().catch(() => "");
         let errorDetail = "";
 
@@ -543,9 +594,14 @@ async function generateWhatsAppConversationReply({ name, incomingText, history, 
         ? content.map((part) => typeof part === "string" ? part : part?.text || "").join("")
         : content;
 
-      if (typeof reply === "string" && reply.trim()) return reply.trim().slice(0, 4000);
+      if (typeof reply === "string" && reply.trim()) {
+        markWhatsAppProviderSuccess(provider);
+        return reply.trim().slice(0, 4000);
+      }
+      markWhatsAppProviderFailure(provider, 0);
       errors.push(`${provider.id}: empty response`);
     } catch (error) {
+      markWhatsAppProviderFailure(provider, 0);
       errors.push(`${provider.id}: ${error.message}`);
     }
   }
@@ -555,45 +611,42 @@ async function generateWhatsAppConversationReply({ name, incomingText, history, 
 
 async function handleChat(body, res) {
   const messages = [{ role: "system", content: SYSTEM_PROMPT }, ...(body.messages || [])];
-  // FREE-ONLY routing. Gemini is opt-in only after its free-tier
-  // project status has been verified. Never fall back to paid providers.
-  const freeOrder = process.env.EXILE_GEMINI_FREE_TIER === "true"
-    ? ["gemini", "openrouter"]
-    : ["openrouter"];
-  const providers = freeOrder
-    .map((id) => available().find((p) => p.id === id))
-    .filter(Boolean);
-  const errors = [];
+  const providers = freeProviderPool.next(process.env);
 
-  for (const p of providers) {
-    try {
-      const upstream = await fetch(`${p.base}/chat/completions`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${process.env[p.key]}`,
-        },
-        body: JSON.stringify({
-          model: p.id === "openrouter" ? "openrouter/free" : "gemini-3.8-flash",
-          messages,
-          stream: true,
-          ...(Array.isArray(body.tools) && body.tools.length
-            ? { tools: body.tools, tool_choice: body.tool_choice || "auto" }
-            : {}),
-        }),
-      });
-      if (!upstream.ok || !upstream.body) {
-        errors.push(`${p.id}: HTTP ${upstream.status} ${await upstream.text().catch(() => "")}`.slice(0, 300));
-        continue;
-      }
-      console.log(`[exile] chat via ${p.id}`);
-      return pipeSSE(upstream, res);
-    } catch (e) {
-      errors.push(`${p.id}: ${e.message}`);
-    }
+  if (!providers.length) {
+    json(res, 503, {
+      error: "No eligible free-tier provider credentials are currently available.",
+    });
+    return;
   }
 
-  json(res, 502, { error: "No configured provider could answer.", details: errors });
+  const configuredTimeout = Number(process.env.EXILE_CHAT_FIRST_TOKEN_TIMEOUT_MS);
+  const timeoutMs =
+    Number.isFinite(configuredTimeout) &&
+    configuredTimeout >= 1000 &&
+    configuredTimeout <= 300000
+      ? configuredTimeout
+      : 45000;
+
+  const result = await streamChatWithProviders({
+    body,
+    messages,
+    res,
+    providers,
+    timeoutMs,
+    corsHeaders: corsFor(res),
+    markFailure: (...args) => freeProviderPool.markFailure(...args),
+    markSuccess: (...args) => freeProviderPool.markSuccess(...args),
+  });
+
+  if (result.aborted || result.ok || result.interrupted) return;
+
+  if (!res.headersSent && !res.destroyed) {
+    json(res, 502, {
+      error: "No eligible free-tier provider could answer.",
+      details: result.errors,
+    });
+  }
 }
 
 async function handleImage(body, res) {
@@ -719,7 +772,7 @@ async function handleImage(body, res) {
     console.log(`[exile] local image generated (${image.length} bytes)`);
 
     res.writeHead(200, {
-      ...CORS,
+      ...corsFor(res),
       "Content-Type": "text/event-stream",
       "Cache-Control": "no-cache",
     });
@@ -785,15 +838,12 @@ function keysPayload() {
 
 /** Saves keys to .env and applies them to the running process immediately. */
 function saveKeys(body) {
+  const { keys: incoming, primary } = validateKeysRequest(body, PROVIDERS.map((p) => p.id));
   const map = readEnvFile();
-  const incoming = Array.isArray(body.keys) ? body.keys.slice(0, MAX_KEYS) : [];
   const kept = new Set();
 
-  for (const item of incoming) {
-    const name = String(item?.name || "").trim().toUpperCase().replace(/[^A-Z0-9_]/g, "_");
-    if (!name) continue;
+  for (const { name, value } of incoming.slice(0, MAX_KEYS)) {
     kept.add(name);
-    const value = String(item?.value ?? "").trim();
     if (value) {
       map.set(name, value);
       process.env[name] = value;
@@ -810,7 +860,6 @@ function saveKeys(body) {
     }
   }
 
-  const primary = String(body.primary || "").trim();
   if (primary) {
     map.set("EXILE_PRIMARY_PROVIDER", primary);
     process.env.EXILE_PRIMARY_PROVIDER = primary;
@@ -832,21 +881,36 @@ const MIME = {
   ".webmanifest": "application/manifest+json", ".ico": "image/x-icon", ".woff2": "font/woff2",
 };
 
-function serveStatic(pathname, res) {
+function serveStatic(pathname, res, req) {
   if (!fs.existsSync(DIST)) return false;
   const rel = pathname === "/" ? "index.html" : pathname.replace(/^\/+/, "");
   let file = path.join(DIST, rel);
-  if (!file.startsWith(DIST)) return false;
+  // Compare with a trailing separator: a bare startsWith(DIST) also matches sibling folders like "dist-old".
+  if (file !== DIST && !file.startsWith(DIST + path.sep)) return false;
   if (!fs.existsSync(file) || fs.statSync(file).isDirectory()) file = path.join(DIST, "index.html");
   if (!fs.existsSync(file)) return false;
-  res.writeHead(200, { "Content-Type": MIME[path.extname(file)] || "application/octet-stream", "Cache-Control": "no-cache" });
-  res.end(fs.readFileSync(file));
+  const type = MIME[path.extname(file)] || "application/octet-stream";
+  let body = fs.readFileSync(file);
+  if (path.extname(file) === ".html" && req && checkLocalRequest(req, null) === null) {
+    // Standalone mode (no Electron/dev launcher): hand the per-session secret to the page we serve
+    // to a loopback Host. Cross-origin pages cannot read this response (no CORS for them).
+    const meta = `<meta name="exile-local-api-secret" content="${localAuth.secret}">`;
+    body = Buffer.from(body.toString("utf8").replace("<head>", `<head>${meta}`));
+  }
+  res.writeHead(200, { "Content-Type": type, "Cache-Control": "no-store" });
+  res.end(body);
   return true;
 }
 
 const server = http.createServer(async (req, res) => {
-  if (req.method === "OPTIONS") { res.writeHead(204, CORS); return res.end(); }
+  res.exileOrigin = req.headers.origin && req.headers.origin !== "null" && isLocalOrigin(req) ? req.headers.origin : undefined;
+  if (req.method === "OPTIONS") { res.writeHead(204, corsFor(res)); return res.end(); }
   const url = new URL(req.url, `http://localhost:${PORT}`);
+
+  if (isProtectedPath(url.pathname)) {
+    const denied = checkLocalRequest(req, localAuth);
+    if (denied) return json(res, denied.status, { error: denied.error });
+  }
 
   try {
     if (url.pathname === "/tasks" || url.pathname.startsWith("/tasks/")) {
@@ -1080,7 +1144,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (url.pathname === "/keys" && req.method === "GET") return json(res, 200, keysPayload());
-    if (req.method === "GET" && serveStatic(url.pathname, res)) return;
+    if (req.method === "GET" && serveStatic(url.pathname, res, req)) return;
     if (req.method !== "POST") return json(res, 404, { error: "Not found" });
 
 
@@ -1306,6 +1370,16 @@ const server = http.createServer(async (req, res) => {
           confirmed: body.confirmed === true,
           forceConfirmed: body.forceConfirmed === true,
         });
+        arcAudit.record({
+          action: "terminate-process",
+          pid: Number(body.pid),
+          name: body.expectedName,
+          ok: result.ok === true,
+          method: result.method,
+          error: result.error,
+          confirmed: body.confirmed === true,
+          forceConfirmed: body.forceConfirmed === true,
+        });
         return json(res, result.ok ? 200 : 400, { ...result, memoryPercent });
       } catch {
         return json(res, 503, {
@@ -1368,7 +1442,10 @@ const server = http.createServer(async (req, res) => {
       );
     }
 
-    if (url.pathname === "/keys") return json(res, 200, saveKeys(body));
+    if (url.pathname === "/keys") {
+      try { return json(res, 200, saveKeys(body)); }
+      catch (e) { if (e instanceof KeyValidationError) return json(res, 400, { error: e.message }); throw e; }
+    }
     if (url.pathname === "/exile-chat") return handleChat(body, res);
     if (url.pathname === "/exile-analyze") {
       // Convert { prompt, attachments } into real messages; never drop the user's files silently.
@@ -1385,7 +1462,7 @@ const server = http.createServer(async (req, res) => {
     return json(res, 404, { error: "Not found" });
   } catch (e) {
     console.error("[exile] error:", e);
-    if (!res.headersSent) json(res, 500, { error: e.message });
+    if (!res.headersSent) json(res, e.statusCode && e.statusCode < 500 ? e.statusCode : 500, { error: e.message });
     else res.end();
   }
 });
@@ -1406,6 +1483,7 @@ server.listen(PORT, "127.0.0.1", () => {
   console.log(`[arc] autonomy monitor ${arcStatus.running ? "started" : "not started"}`);
   const keys = allKeys();
   console.log(`\n  EXILE local API  ->  http://localhost:${PORT}`);
+  console.log(`  Local API auth:  ${localAuth.suppliedByLauncher ? "secret supplied by launcher" : "per-session secret generated (served to loopback page loads only)"}`);
   console.log(`  Providers ready: ${available().map((p) => p.id).join(", ") || "none"}`);
   console.log(`  Keys detected:   ${keys.length} / 200 max`);
   if (keys.length < 2) console.log("  ! Add at least 2 API keys in .env for redundancy.\n");

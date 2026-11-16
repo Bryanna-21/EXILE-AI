@@ -14,6 +14,8 @@ import {
   handleWhatsAppConversationIncoming,
   getWhatsAppConversationAIConfig,
 } from "./whatsapp-conversation.mjs";
+import fsRetry from "./fs-retry.cjs";
+const { renameSyncRetry } = fsRetry;
 
 const AUTH_DIR =
   process.env.EXILE_WHATSAPP_AUTH_DIR ||
@@ -53,7 +55,7 @@ function persistDirectory() {
   try {
     fs.mkdirSync(path.dirname(DIRECTORY_STORE), { recursive: true });
     fs.writeFileSync(temporary, JSON.stringify(directory), "utf8");
-    fs.renameSync(temporary, DIRECTORY_STORE);
+    renameSyncRetry(fs, temporary, DIRECTORY_STORE);
   } catch (error) {
     console.error("[WhatsApp] Could not persist contact directory:", error);
     try { fs.rmSync(temporary, { force: true }); } catch {}
@@ -157,7 +159,7 @@ function persistMessages() {
   try {
     fs.mkdirSync(path.dirname(MESSAGE_STORE), { recursive: true });
     fs.writeFileSync(temporary, JSON.stringify(messages), "utf8");
-    fs.renameSync(temporary, MESSAGE_STORE);
+    renameSyncRetry(fs, temporary, MESSAGE_STORE);
   } catch (error) {
     console.error("[WhatsApp] Could not persist messages:", error);
     try {

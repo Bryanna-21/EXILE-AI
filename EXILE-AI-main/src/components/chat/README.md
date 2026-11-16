@@ -35,7 +35,7 @@ Modified: `src/pages/Index.tsx`, `src/lib/conversation.ts`.
 
 - Edit, Resend and Regenerate replace every message after the one being re-run. Regenerate is offered on the latest answer only.
 - Delete removes one message and offers Undo for a few seconds.
-- Attachment and image previews are not kept after a page reload (too large for localStorage). Message text is.
+- Attachments and generated images are stored in IndexedDB (150 MB per device scope; oldest media is evicted first) and survive reloads. If IndexedDB is unavailable they live in memory only and are lost on reload (`chatMedia.durable` reports which). Message text is in localStorage.
 - Highlighting covers JS/TS/JSX/TSX, Python, HTML/XML, CSS, JSON, SQL, Java, C/C++, Go, Rust, YAML and Markdown; other languages are shown unhighlighted with their name.
 - PDF preview uses the browser's own PDF viewer; the extracted text is available as a fallback.
 - Copy image needs a browser that supports the async clipboard for images and permission to use it.

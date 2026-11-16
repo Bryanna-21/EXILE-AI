@@ -10,8 +10,9 @@ import http from "node:http";
 const defaultDir = fs.mkdtempSync(path.join(os.tmpdir(), "exile-task-default-"));
 process.env.EXILE_TASK_STORE_DIR = defaultDir;
 
-const { createTaskApiHandler, handleTaskApi } = await import("../local/task-api.mjs");
+const { createTaskApiHandler, handleTaskApi, createPlannerCallModel } = await import("../local/task-api.mjs");
 const { TaskStore } = await import("../local/task-store.mjs");
+const { localAuth } = await import("../local/local-auth.mjs");
 const { ToolRegistry, TOOL_DEFINITIONS } = await import("../local/tool-registry.mjs");
 const { PermissionGateway } = await import("../local/permission-gateway.mjs");
 const { TaskOrchestrator } = await import("../local/task-orchestrator.mjs");
@@ -95,6 +96,49 @@ async function makeApi({ script, extraTools = [], limits } = {}) {
 }
 
 /* ---------------------------------- tests ---------------------------------- */
+/* ------------------------- planner cancellation ------------------------- */
+
+test("production planner fetch is aborted with its task and does not fall back", async () => {
+  const controller = new AbortController();
+  let fetchCount = 0;
+  let observedSignal;
+
+  const callModel = createPlannerCallModel({
+    env: { GEMINI_API_KEY: "test-gemini", OPENROUTER_API_KEY: "test-openrouter" },
+    getProviderOrder: () => ["gemini", "openrouter"],
+    fetchImpl: (_url, options) => {
+      fetchCount += 1;
+      observedSignal = options.signal;
+      return new Promise((_resolve, reject) => {
+        if (options.signal.aborted) {
+          reject(options.signal.reason);
+          return;
+        }
+        options.signal.addEventListener(
+          "abort",
+          () => reject(options.signal.reason),
+          { once: true },
+        );
+      });
+    },
+  });
+
+  const pending = callModel([{ role: "user", content: "test" }], {
+    signal: controller.signal,
+  });
+
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(fetchCount, 1);
+  assert.ok(observedSignal instanceof AbortSignal);
+  assert.equal(observedSignal.aborted, false);
+
+  controller.abort();
+  await assert.rejects(pending);
+  assert.equal(observedSignal.aborted, true);
+  assert.equal(fetchCount, 1, "cancellation must not start the fallback provider");
+});
+
+
 
 test("origin policy: only the local app may use the task API", async () => {
   const api = await makeApi({ script: "" });
@@ -270,6 +314,41 @@ test("approval: a sensitive tool does not run until approved; the one-time token
   assert.equal(done.status, "completed");
   assert.equal(counter.n, 1, "executed exactly once, after approval");
   assert.ok(done.events.some((e) => e.type === "approval" && /APPROVED/.test(e.message)));
+});
+
+test("approval challenge: a different task URL cannot retrieve or consume another task's token", async () => {
+  const counter = { n: 0 };
+  const api = await makeApi({
+    script: plan([sensitiveStep(), verifyStep()]),
+    extraTools: [sensitiveTool(counter)],
+  });
+
+  const firstId = (await api.call("POST", "/tasks", { objective: "First approval", start: true })).json.task.id;
+  const secondId = (await api.call("POST", "/tasks", { objective: "Second approval", start: true })).json.task.id;
+
+  const first = await api.waitFor(firstId, "waiting_approval");
+  await api.waitFor(secondId, "waiting_approval");
+  const requestId = first.approvals[0].requestId;
+
+  const wrongTask = await api.call(
+    "GET",
+    `/tasks/${secondId}/approval-challenge?requestId=${requestId}`,
+  );
+  assert.equal(wrongTask.status, 404);
+
+  const correctTask = await api.call(
+    "GET",
+    `/tasks/${firstId}/approval-challenge?requestId=${requestId}`,
+  );
+  assert.equal(correctTask.status, 200);
+  assert.ok(correctTask.json.token.length >= 32);
+
+  const replay = await api.call(
+    "GET",
+    `/tasks/${firstId}/approval-challenge?requestId=${requestId}`,
+  );
+  assert.equal(replay.status, 404);
+  assert.equal(counter.n, 0);
 });
 
 test("approval: a wrong token is refused and the sensitive tool never runs", async () => {
@@ -490,7 +569,7 @@ test("default instance: capabilities report which provider is configured but nev
     const run = async () => {
       const server = http.createServer(async (req, res) => { if (!(await handleTaskApi(req, res, new URL(req.url, "http://127.0.0.1")))) res.writeHead(404).end(); });
       await new Promise((r) => server.listen(0, "127.0.0.1", r));
-      const res = await fetch(`http://127.0.0.1:${server.address().port}/tasks/capabilities`);
+      const res = await fetch(`http://127.0.0.1:${server.address().port}/tasks/capabilities`, { headers: { "x-exile-local-auth": localAuth.secret } });
       const text = await res.text();
       server.closeAllConnections?.();
       await new Promise((r) => server.close(r));

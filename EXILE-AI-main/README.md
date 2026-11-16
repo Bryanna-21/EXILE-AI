@@ -1,73 +1,44 @@
-# Welcome to your Lovable project
+# EXILE AI
 
-## Project info
+A desktop-first AI workspace: React + TypeScript + Vite UI, an Electron shell, and a local Node server
+(`local/server.mjs`, 127.0.0.1:8787) that hosts chat, task execution, ARC system monitoring and optional integrations.
 
-**URL**: https://lovable.dev/projects/4cf668ef-4713-4d0b-b0e6-b7a40b531c56
+## Quick start
 
-## How can I edit this code?
-
-There are several ways of editing your application.
-
-**Use Lovable**
-
-Simply visit the [Lovable Project](https://lovable.dev/projects/4cf668ef-4713-4d0b-b0e6-b7a40b531c56) and start prompting.
-
-Changes made via Lovable will be committed automatically to this repo.
-
-**Use your preferred IDE**
-
-If you want to work locally using your own IDE, you can clone this repo and push changes. Pushed changes will also be reflected in Lovable.
-
-The only requirement is having Node.js & npm installed - [install with nvm](https://github.com/nvm-sh/nvm#installing-and-updating)
-
-Follow these steps:
-
-```sh
-# Step 1: Clone the repository using the project's Git URL.
-git clone <YOUR_GIT_URL>
-
-# Step 2: Navigate to the project directory.
-cd <YOUR_PROJECT_NAME>
-
-# Step 3: Install the necessary dependencies.
-npm i
-
-# Step 4: Start the development server with auto-reloading and an instant preview.
-npm run dev
+```bash
+npm ci
+cp .env.example .env        # fill in Supabase values (optional for local-only use)
+npm run local               # local API + Vite dev server, sharing a per-launch API secret
 ```
 
-**Edit a file directly in GitHub**
+Other scripts: `npm test`, `npm run typecheck`, `npm run lint`, `npm run build`, `npm run electron`,
+`npm run package:win` (Windows installer; must be run on Windows).
 
-- Navigate to the desired file(s).
-- Click the "Edit" button (pencil icon) at the top right of the file view.
-- Make your changes and commit the changes.
+## Configuration
 
-**Use GitHub Codespaces**
+See `.env.example`. Supabase is optional: without it the app runs against the local server and
+Supabase-backed features report a clear configuration error naming the missing variables.
+Provider API keys for the local server go in `.env` (never committed); see `local/README-LOCAL.md`.
 
-- Navigate to the main page of your repository.
-- Click on the "Code" button (green button) near the top right.
-- Select the "Codespaces" tab.
-- Click on "New codespace" to launch a new Codespace environment.
-- Edit files directly within the Codespace and commit and push your changes once you're done.
+## Documentation
 
-## What technologies are used for this project?
+- `local/README-LOCAL.md` — local server and providers
+- `docs/release-readiness.md` — release status, test results, blockers, next action
+- `docs/phase1-task-engine-audit.md`, `phase2-platform-decoupling.md`, `phase4-chat-completion.md`,
+  `phase5-native-apps-windows.md`, `security-audit.md`, `phase7-bundle-performance.md`,
+  `phase8-electron-release-review.md`
 
-This project is built with:
+## Architecture and security model (summary)
 
-- Vite
-- TypeScript
-- React
-- shadcn-ui
-- Tailwind CSS
+- Renderer (React/Vite) → local Node API on `127.0.0.1:8787` (`local/server.mjs`) → providers / tool registry /
+  task orchestrator / ARC process manager. Electron (`electron/main.cjs`) spawns the API and passes a per-launch
+  secret to the renderer through the preload bridge.
+- Every protected local API route requires the `x-exile-local-auth` secret plus loopback Host/Origin checks;
+  CORS is per-request, not wildcard. Risky tool actions go through the permission gateway.
+- Electron windows block off-app navigation and only grant a short allow-list of permissions.
+- Troubleshooting: check `exile-api.log` in the user-data folder; `GET /health` shows API status.
 
-## How can I deploy this project?
+## Known limitations
 
-Simply open [Lovable](https://lovable.dev/projects/4cf668ef-4713-4d0b-b0e6-b7a40b531c56) and click on Share -> Publish.
-
-## Can I connect a custom domain to my Lovable project?
-
-Yes, you can!
-
-To connect a domain, navigate to Project > Settings > Domains and click Connect Domain.
-
-Read more here: [Setting up a custom domain](https://docs.lovable.dev/tips-tricks/custom-domain#step-by-step-guide)
+See `docs/release-readiness.md` (Windows installer untested, unsigned, no strict CSP, provider voice/streaming
+untested against real providers).

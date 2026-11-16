@@ -148,7 +148,7 @@ Deno.serve(async (req) => {
 
   try {
     const { messages, tier, tools: useTools = true } = await req.json();
-    const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
+    const LOVABLE_API_KEY = (Deno.env.get("AI_GATEWAY_API_KEY") ?? Deno.env.get("LOVABLE_API_KEY"));
     if (!LOVABLE_API_KEY) {
       return new Response(JSON.stringify({ error: "AI not configured" }), {
         status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -167,7 +167,7 @@ Deno.serve(async (req) => {
       body.tool_choice = "auto";
     }
 
-    const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+    const response = await fetch(`${Deno.env.get("AI_GATEWAY_URL") ?? "https://ai.gateway.lovable.dev/v1"}/chat/completions`, {
       method: "POST",
       headers: {
         "Authorization": `Bearer ${LOVABLE_API_KEY}`,

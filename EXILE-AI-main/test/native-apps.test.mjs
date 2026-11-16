@@ -14,6 +14,11 @@ const { createNativeAppService } = require("../electron/native-apps/service.cjs"
 const { discoverFromShortcuts, collectShortcuts } = require("../electron/native-apps/discovery.cjs");
 const { registerNativeAppIpc, CHANNELS, isTrustedSender } = require("../electron/native-apps/index.cjs");
 
+// Fixtures that are POSIX shell scripts, exec bits or symlinks cannot run on a Windows host. They test the
+// product on Linux/macOS; the Windows launch contract is covered by the "windows launch contract" tests below,
+// which inject spawn/inspect and therefore run on every platform.
+const POSIX_FIXTURE = process.platform === "win32" ? "POSIX-only fixture (shell script / exec bit / symlink); see 'windows launch contract' tests" : false;
+
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), "exile-native-apps-"));
 const cleanup = (dir) => fs.rmSync(dir, { recursive: true, force: true });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -104,7 +109,7 @@ test("names and categories are cleaned and bounded", () => {
   assert.equal(v.validateCategory("x".repeat(41)).ok, false);
 });
 
-test("inspectExecutable reports missing, directory and non-executable states on real files", () => {
+test("inspectExecutable reports missing, directory and non-executable states on real files", { skip: POSIX_FIXTURE }, () => {
   const dir = tmp();
   try {
     const file = path.join(dir, "prog");
@@ -201,7 +206,7 @@ test("store refuses to overwrite a file written by a newer version", () => {
 
 /* ================================ discovery ================================= */
 
-test("discovery walks Start Menu folders without following symlinks and bounds the scan", () => {
+test("discovery walks Start Menu folders without following symlinks and bounds the scan", { skip: POSIX_FIXTURE }, () => {
   const dir = tmp();
   try {
     fs.mkdirSync(path.join(dir, "Sub", "Deep"), { recursive: true });
@@ -218,7 +223,7 @@ test("discovery walks Start Menu folders without following symlinks and bounds t
   }
 });
 
-test("discovery reads shortcuts only, filters unsafe targets and reports why", () => {
+test("discovery reads shortcuts only, filters unsafe targets and reports why", { skip: POSIX_FIXTURE }, () => {
   const dir = tmp();
   try {
     for (const n of ["Editor.lnk", "Editor Copy.lnk", "Uninstall Editor.lnk", "Script.lnk", "Broken.lnk", "Shell.lnk", "Args.lnk", "Folder.lnk", "BadArgs.lnk"]) {
@@ -297,7 +302,7 @@ function makeService(dir, overrides = {}) {
   return { service: createNativeAppService(deps), store, spawned, queue, confirms };
 }
 
-test("importing an application NEVER runs it, and the entry persists across a restart", async () => {
+test("importing an application NEVER runs it, and the entry persists across a restart", { skip: POSIX_FIXTURE }, async () => {
   const dir = tmp();
   try {
     const app = makeProbeApp(dir);
@@ -323,7 +328,7 @@ test("importing an application NEVER runs it, and the entry persists across a re
   }
 });
 
-test("duplicate imports are refused with a clear message", async () => {
+test("duplicate imports are refused with a clear message", { skip: POSIX_FIXTURE }, async () => {
   const dir = tmp();
   try {
     const app = makeProbeApp(dir);
@@ -352,7 +357,7 @@ test("cancelling the file dialog changes nothing", async () => {
   }
 });
 
-test("launch starts a real process without a shell and tracks running then stopped", async () => {
+test("launch starts a real process without a shell and tracks running then stopped", { skip: POSIX_FIXTURE }, async () => {
   const dir = tmp();
   try {
     const app = makeProbeApp(dir, "probe-app", "0.6");
@@ -399,7 +404,7 @@ test("launch starts a real process without a shell and tracks running then stopp
   }
 });
 
-test("several different applications can run at once", async () => {
+test("several different applications can run at once", { skip: POSIX_FIXTURE }, async () => {
   const dir = tmp();
   try {
     const a = makeProbeApp(dir, "probe-a", "0.8");
@@ -417,7 +422,7 @@ test("several different applications can run at once", async () => {
   }
 });
 
-test("shell metacharacters in arguments reach the program as literal text and are never interpreted", async () => {
+test("shell metacharacters in arguments reach the program as literal text and are never interpreted", { skip: POSIX_FIXTURE }, async () => {
   const dir = tmp();
   try {
     const app = makeProbeApp(dir, "probe-args", "0.1");
@@ -439,7 +444,7 @@ test("shell metacharacters in arguments reach the program as literal text and ar
   }
 });
 
-test("a hostile application NAME is stored as inert text and cannot influence launching", async () => {
+test("a hostile application NAME is stored as inert text and cannot influence launching", { skip: POSIX_FIXTURE }, async () => {
   const dir = tmp();
   try {
     const app = makeProbeApp(dir, "probe-name", "0.1");
@@ -458,7 +463,7 @@ test("a hostile application NAME is stored as inert text and cannot influence la
   }
 });
 
-test("changing launch arguments needs native confirmation; declining leaves the entry unchanged", async () => {
+test("changing launch arguments needs native confirmation; declining leaves the entry unchanged", { skip: POSIX_FIXTURE }, async () => {
   const dir = tmp();
   try {
     const app = makeProbeApp(dir);
@@ -484,7 +489,7 @@ test("changing launch arguments needs native confirmation; declining leaves the 
   }
 });
 
-test("update rejects fields that must not be edited from the page, including paths", async () => {
+test("update rejects fields that must not be edited from the page, including paths", { skip: POSIX_FIXTURE }, async () => {
   const dir = tmp();
   try {
     const app = makeProbeApp(dir);
@@ -501,7 +506,7 @@ test("update rejects fields that must not be edited from the page, including pat
   }
 });
 
-test("interpreters can be imported but never saved with arguments", async () => {
+test("interpreters can be imported but never saved with arguments", { skip: POSIX_FIXTURE }, async () => {
   const dir = tmp();
   try {
     const shell = makeProbeApp(dir, "bash");
@@ -517,7 +522,7 @@ test("interpreters can be imported but never saved with arguments", async () => 
   }
 });
 
-test("missing executables are detected, cannot launch, and are recorded in history", async () => {
+test("missing executables are detected, cannot launch, and are recorded in history", { skip: POSIX_FIXTURE }, async () => {
   const dir = tmp();
   try {
     const app = makeProbeApp(dir);
@@ -538,7 +543,7 @@ test("missing executables are detected, cannot launch, and are recorded in histo
   }
 });
 
-test("a file that cannot be started reports a launch failure instead of crashing", async () => {
+test("a file that cannot be started reports a launch failure instead of crashing", { skip: POSIX_FIXTURE }, async () => {
   const dir = tmp();
   try {
     // Passes the pre-launch checks (a real, executable file) but the OS cannot start it:
@@ -558,7 +563,7 @@ test("a file that cannot be started reports a launch failure instead of crashing
   }
 });
 
-test("relinking repairs a missing application and refuses duplicates", async () => {
+test("relinking repairs a missing application and refuses duplicates", { skip: POSIX_FIXTURE }, async () => {
   const dir = tmp();
   try {
     const original = makeProbeApp(dir, "probe-old");
@@ -587,7 +592,7 @@ test("relinking repairs a missing application and refuses duplicates", async () 
   }
 });
 
-test("reorder accepts only an exact permutation and persists", async () => {
+test("reorder accepts only an exact permutation and persists", { skip: POSIX_FIXTURE }, async () => {
   const dir = tmp();
   try {
     const a = makeProbeApp(dir, "probe-a");
@@ -610,7 +615,7 @@ test("reorder accepts only an exact permutation and persists", async () => {
   }
 });
 
-test("removing an application deletes only the list entry, never the program", async () => {
+test("removing an application deletes only the list entry, never the program", { skip: POSIX_FIXTURE }, async () => {
   const dir = tmp();
   try {
     const app = makeProbeApp(dir);
@@ -627,7 +632,7 @@ test("removing an application deletes only the list entry, never the program", a
   }
 });
 
-test("history is bounded and can be cleared", async () => {
+test("history is bounded and can be cleared", { skip: POSIX_FIXTURE }, async () => {
   const dir = tmp();
   try {
     const app = makeProbeApp(dir, "probe-h", "0");
@@ -882,4 +887,158 @@ test("main process keeps context isolation and the sandbox on for every window",
   assert.equal((main.match(/sandbox: true/g) ?? []).length, 2);
   assert.equal((main.match(/nodeIntegration: false/g) ?? []).length, 2);
   assert.doesNotMatch(main, /contextIsolation: false|sandbox: false|nodeIntegration: true|webSecurity: false|enableRemoteModule/);
+});
+
+
+/* ===================== windows launch contract (runs on every platform) ===================== */
+
+import { EventEmitter } from "node:events";
+
+function winLaunchRig(overrides = {}) {
+  const dir = tmp();
+  const store = new NativeAppStore(path.join(dir, "native-apps.json"), "win32");
+  const calls = [];
+  const children = [];
+  const exe = "C:\\Program Files\\Editor App\\editor.exe";
+  store.apps.push({ id: "11111111-aaaa", name: "Editor", executablePath: exe, args: ["--open", "C:\\My Docs\\a b.txt"], category: "", favorite: false, source: "manual", addedAt: 1, launchCount: 0, lastLaunchedAt: null });
+  const service = createNativeAppService({
+    store, platform: "win32",
+    spawn: (file, args, opts) => {
+      calls.push({ file, args, opts });
+      if (overrides.spawnThrows) throw overrides.spawnThrows;
+      const child = new EventEmitter();
+      child.pid = 4321; child.unref = () => {};
+      children.push(child);
+      queueMicrotask(() => (overrides.spawnError ? child.emit("error", overrides.spawnError) : child.emit("spawn")));
+      return child;
+    },
+    inspect: overrides.inspect ?? ((p) => ({ ok: true, path: p, realPath: "C:\\Program Files\\Editor App\\EDITOR.EXE" })),
+    readShortcut: () => ({ target: "", args: "" }), startMenuRoots: () => [],
+    chooseExecutable: async () => null, chooseShortcut: async () => null,
+    confirm: async () => true, getIcon: async () => null,
+  });
+  return { dir, service, store, calls, children };
+}
+
+test("windows launch contract: no shell, argv array, resolved path, own working directory, scrubbed environment", async () => {
+  const rig = winLaunchRig();
+  const saved = { a: process.env.ELECTRON_RUN_AS_NODE, b: process.env.NODE_OPTIONS, c: process.env.EXILE_LOCAL_API_SECRET };
+  process.env.ELECTRON_RUN_AS_NODE = "1"; process.env.NODE_OPTIONS = "--inspect"; process.env.EXILE_LOCAL_API_SECRET = "s3cret";
+  try {
+    const r = await rig.service.launch("11111111-aaaa");
+    assert.equal(r.ok, true);
+    const { file, args, opts } = rig.calls[0];
+    assert.equal(file, "C:\\Program Files\\Editor App\\EDITOR.EXE", "uses the inspected, resolved path");
+    assert.deepEqual(args, ["--open", "C:\\My Docs\\a b.txt"], "arguments stay one-per-element (spaces are not re-split)");
+    assert.equal(opts.shell, false);
+    assert.equal(opts.detached, true);
+    assert.equal(opts.stdio, "ignore");
+    assert.equal(opts.cwd, "C:\\Program Files\\Editor App", "cwd follows the executable using Windows path rules");
+    for (const k of ["ELECTRON_RUN_AS_NODE", "NODE_OPTIONS", "EXILE_LOCAL_API_SECRET"]) assert.equal(k in opts.env, false, k + " must not leak to launched apps");
+  } finally {
+    for (const [k, val] of [["ELECTRON_RUN_AS_NODE", saved.a], ["NODE_OPTIONS", saved.b], ["EXILE_LOCAL_API_SECRET", saved.c]]) { if (val === undefined) delete process.env[k]; else process.env[k] = val; }
+    cleanup(rig.dir);
+  }
+});
+
+test("windows launch contract: a second launch while running is refused until the process exits", async () => {
+  const rig = winLaunchRig();
+  try {
+    assert.equal((await rig.service.launch("11111111-aaaa")).ok, true);
+    const again = await rig.service.launch("11111111-aaaa");
+    assert.equal(again.alreadyRunning, true);
+    assert.equal(rig.calls.length, 1);
+    rig.children[0].emit("exit");
+    assert.equal((await rig.service.launch("11111111-aaaa")).ok, true);
+    assert.equal(rig.calls.length, 2);
+  } finally { cleanup(rig.dir); }
+});
+
+test("windows launch contract: OS refusals map to readable messages and are recorded, never thrown", async () => {
+  for (const [code, pattern] of [["ENOENT", /could not be found/], ["EPERM", /permission denied/], ["EACCES", /permission denied/], ["UNKNOWN", /could not be started as a program/], ["EFTYPE", /could not be started as a program/]]) {
+    const rig = winLaunchRig({ spawnError: Object.assign(new Error("x"), { code }) });
+    try {
+      const r = await rig.service.launch("11111111-aaaa");
+      assert.equal(r.ok, false, code);
+      assert.match(JSON.stringify(r), pattern);
+      assert.equal(rig.store.history.at(-1).outcome, "failed");
+    } finally { cleanup(rig.dir); }
+  }
+  const rig = winLaunchRig({ spawnThrows: Object.assign(new Error("boom"), { code: "ENOENT" }) });
+  try { assert.equal((await rig.service.launch("11111111-aaaa")).ok, false); } finally { cleanup(rig.dir); }
+});
+
+test("windows launch contract: a program that moved or became a shell with arguments is refused before spawn", async () => {
+  const missing = winLaunchRig({ inspect: () => ({ ok: false, status: "missing", error: { code: "missing", message: "The program file is missing." } }) });
+  try {
+    assert.equal((await missing.service.launch("11111111-aaaa")).ok, false);
+    assert.equal(missing.calls.length, 0);
+  } finally { cleanup(missing.dir); }
+  const shell = winLaunchRig({ inspect: (p) => ({ ok: true, path: p, realPath: "C:\\Windows\\System32\\cmd.exe" }) });
+  try {
+    assert.equal((await shell.service.launch("11111111-aaaa")).ok, false, "cmd.exe with arguments is never launched");
+    assert.equal(shell.calls.length, 0);
+  } finally { cleanup(shell.dir); }
+});
+
+test("windows launch contract: a relative or non-Windows resolved path is refused", async () => {
+  for (const realPath of ["editor.exe", "/usr/bin/editor", "\\\\server\\share\\editor.exe"]) {
+    const rig = winLaunchRig({ inspect: (p) => ({ ok: true, path: p, realPath }) });
+    try {
+      const r = await rig.service.launch("11111111-aaaa");
+      assert.equal(rig.calls.length, 0, realPath);
+      assert.equal(r.ok, false, realPath);
+    } finally { cleanup(rig.dir); }
+  }
+});
+
+/* ===================== transient Windows file locks ===================== */
+
+const { renameSyncRetry } = require("../local/fs-retry.cjs");
+
+test("renameSyncRetry: retries transient EPERM/EBUSY/EACCES on Windows, then succeeds", () => {
+  for (const code of ["EPERM", "EBUSY", "EACCES"]) {
+    let calls = 0; const waits = [];
+    const fake = { renameSync: () => { if (++calls < 3) throw Object.assign(new Error(code), { code }); } };
+    renameSyncRetry(fake, "a", "b", { platform: "win32", sleep: (ms) => waits.push(ms) });
+    assert.equal(calls, 3);
+    assert.deepEqual(waits, [15, 30], "exponential back-off");
+  }
+});
+
+test("renameSyncRetry: gives up after the retry budget and surfaces the original error", () => {
+  let calls = 0;
+  const fake = { renameSync: () => { calls++; throw Object.assign(new Error("locked"), { code: "EBUSY" }); } };
+  assert.throws(() => renameSyncRetry(fake, "a", "b", { platform: "win32", retries: 3, sleep: () => {} }), /locked/);
+  assert.equal(calls, 4);
+});
+
+test("renameSyncRetry: non-transient errors and non-Windows platforms are not retried", () => {
+  let calls = 0;
+  const enoent = { renameSync: () => { calls++; throw Object.assign(new Error("gone"), { code: "ENOENT" }); } };
+  assert.throws(() => renameSyncRetry(enoent, "a", "b", { platform: "win32", sleep: () => {} }), /gone/);
+  assert.equal(calls, 1);
+  calls = 0;
+  const eperm = { renameSync: () => { calls++; throw Object.assign(new Error("denied"), { code: "EPERM" }); } };
+  assert.throws(() => renameSyncRetry(eperm, "a", "b", { platform: "linux", sleep: () => {} }), /denied/);
+  assert.equal(calls, 1);
+});
+
+test("the store saves through the retrying rename (simulated transient lock)", () => {
+  const dir = tmp();
+  const realRename = fs.renameSync; let fails = 2; let seen = 0;
+  const origPlatform = Object.getOwnPropertyDescriptor(process, "platform");
+  try {
+    Object.defineProperty(process, "platform", { value: "win32" });
+    fs.renameSync = (a, b) => { seen++; if (fails-- > 0) throw Object.assign(new Error("busy"), { code: "EBUSY" }); return realRename(a, b); };
+    const file = path.join(dir, "native-apps.json");
+    const s = new NativeAppStore(file, "win32");
+    s.save();
+    assert.ok(seen >= 3);
+    assert.ok(fs.existsSync(file));
+  } finally {
+    fs.renameSync = realRename;
+    Object.defineProperty(process, "platform", origPlatform);
+    cleanup(dir);
+  }
 });

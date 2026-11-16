@@ -16,6 +16,7 @@ import { arcAutonomyEngine } from "./arc-autonomy-engine.mjs";
 
 export const RISKS = new Set(["safe", "reversible", "sensitive", "destructive"]);
 const APPROVAL_REQUIRED_RISKS = new Set(["sensitive", "destructive"]);
+export const DEFAULT_TOOL_TIMEOUT_MS = 30_000;
 
 /** Minimal JSON-Schema-subset validator (no dependency). */
 export function validateArgs(schema, args, pathLabel = "$") {
@@ -122,8 +123,8 @@ export const TOOL_DEFINITIONS = [
     risk: "safe",
     approvalRequired: false,
     available: () => true,
-    async execute() {
-      const status = await fetch(`http://127.0.0.1:${process.env.EXILE_PORT || 8787}/exile-health`).catch(() => null);
+    async execute(_args, ctx) {
+      const status = await fetch(`http://127.0.0.1:${process.env.EXILE_PORT || 8787}/exile-health`, { signal: ctx?.signal }).catch(() => null);
       if (!status) return fail("Local API is unreachable.", true);
       return ok(await status.json().catch(() => ({ checkedAt: new Date().toISOString() })));
     },
@@ -347,7 +348,16 @@ export class ToolRegistry {
     return !!tool && (!!tool.approvalRequired || APPROVAL_REQUIRED_RISKS.has(tool.risk));
   }
 
-  /** Validate, check availability, then run the registered adapter. */
+  /**
+   * Validate, check availability, authorize, then run the registered adapter.
+   *
+   * `ctx.signal` (AbortSignal) interrupts the call: the registry stops waiting,
+   * passes the same signal to the adapter so it can cancel its own I/O, and
+   * reports `aborted`/`timedOut` instead of a result. Every tool also has a hard
+   * time budget (`tool.timeoutMs`, default 30s) so a hung adapter cannot stall a
+   * task. The approval grant is consumed only after validation, availability and
+   * an abort check have passed, immediately before the adapter starts.
+   */
   async invoke(name, args, ctx) {
     const tool = this.get(name);
     if (!tool) return { ok: false, error: `Unknown tool "${name}" — not in registry.`, recoverable: false };
@@ -365,6 +375,9 @@ export class ToolRegistry {
     if (!avail) {
       return { ok: false, error: `Tool "${name}" is currently unavailable (capability offline).`, recoverable: true };
     }
+    if (ctx?.signal?.aborted) {
+      return { ok: false, aborted: true, error: "Operation interrupted before it started.", recoverable: false, tool: name, started: false };
+    }
     if (tool.approvalRequired || APPROVAL_REQUIRED_RISKS.has(tool.risk)) {
       if (typeof ctx?.authorizeExecution !== "function") {
         return { ok: false, error: "Sensitive operation blocked: permission gateway is not connected.", recoverable: false };
@@ -374,16 +387,40 @@ export class ToolRegistry {
         return { ok: false, error: `Sensitive operation blocked: ${authorization?.error ?? "approval required"}`, recoverable: false };
       }
     }
+
+    const timeoutMs = Number.isFinite(tool.timeoutMs) && tool.timeoutMs > 0 ? tool.timeoutMs : DEFAULT_TOOL_TIMEOUT_MS;
+    const controller = new AbortController();
+    const onOuterAbort = () => controller.abort(ctx.signal.reason ?? new Error("aborted"));
+    ctx?.signal?.addEventListener?.("abort", onOuterAbort, { once: true });
+    let timer;
+    let settleInterrupt;
+    const interrupted = new Promise((resolve) => { settleInterrupt = resolve; });
+    controller.signal.addEventListener("abort", () => settleInterrupt({ aborted: true }), { once: true });
+    timer = setTimeout(() => {
+      settleInterrupt({ timedOut: true });
+      controller.abort(new Error(`Tool timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+
     try {
-      const result = await tool.execute(args ?? {}, ctx);
-      return {
-        ...result,
-        tool: name,
-        risk: tool.risk,
-        at: new Date().toISOString(),
-      };
-    } catch (e) {
-      return { ok: false, error: redactOutput(e?.message ?? String(e)), recoverable: true, tool: name };
+      const run = Promise.resolve()
+        .then(() => tool.execute(args ?? {}, { ...ctx, signal: controller.signal }))
+        .then((result) => ({ result }), (error) => ({ error }));
+      const winner = await Promise.race([run, interrupted]);
+      if (winner.timedOut) {
+        run.catch(() => {}); // adapter may still settle later; ignore it
+        return { ok: false, timedOut: true, error: `Tool "${name}" timed out after ${timeoutMs}ms.`, recoverable: tool.risk === "safe", tool: name, started: true, risk: tool.risk };
+      }
+      if (winner.aborted) {
+        run.catch(() => {});
+        return { ok: false, aborted: true, error: "Operation interrupted by the operator or the task budget.", recoverable: false, tool: name, started: true, risk: tool.risk };
+      }
+      if (winner.error) {
+        return { ok: false, error: redactOutput(winner.error?.message ?? String(winner.error)), recoverable: true, tool: name, risk: tool.risk };
+      }
+      return { ...winner.result, tool: name, risk: tool.risk, at: new Date().toISOString() };
+    } finally {
+      clearTimeout(timer);
+      ctx?.signal?.removeEventListener?.("abort", onOuterAbort);
     }
   }
 }

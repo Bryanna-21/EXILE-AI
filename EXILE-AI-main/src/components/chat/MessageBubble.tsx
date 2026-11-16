@@ -195,7 +195,7 @@ const MessageBubble = ({ turn, status, busy, streaming, thinking, files, quoted,
             {missingNames.map((n) => (
               <div key={n} className="my-1.5 max-w-sm rounded-lg border border-slate-600/50 bg-slate-950/60 px-2.5 py-1.5 text-[12px] text-slate-300" data-testid="file-missing">
                 <span className="break-all">{n}</span>
-                <span className="block text-[10px] text-slate-400">Preview and download are unavailable after the page was reloaded.</span>
+                <span className="block text-[10px] text-slate-400">This file is no longer stored on this device, so preview and download are unavailable.</span>
               </div>
             ))}
           </div>

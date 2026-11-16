@@ -1,5 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
-import * as pdfjsLib from 'pdfjs-dist';
+import { Suspense, lazy, useEffect, useRef, useState } from 'react';
 import {
   MessageCircle, Camera, Search, Mic, Files, Share2, Wifi, WifiOff, Activity,
   MessageSquare, Phone, ShieldCheck, Home, Car, LayoutDashboard, Wand2, Film,
@@ -8,24 +7,6 @@ import {
 } from 'lucide-react';
 
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
-import CameraSection from '@/components/CameraSection';
-import FilesSection from '@/components/FilesSection';
-import ShareSection from '@/components/ShareSection';
-import VoiceSection from '@/components/VoiceSection';
-import ImageAnalysisSection from '@/components/ImageAnalysisSection';
-import WhatsAppSection from '@/components/WhatsAppSection';
-import CallsSection from '@/components/CallsSection';
-import DashboardSection from '@/components/DashboardSection';
-import SystemAccessSection from '@/components/SystemAccessSection';
-import HouseSection from '@/components/HouseSection';
-import CarControlSection from '@/components/CarControlSection';
-import MissionControl from '@/components/MissionControl';
-import VideoStoryboardSection from '@/components/VideoStoryboardSection';
-import DocumentSection from '@/components/DocumentSection';
-import ResearchSection from '@/components/ResearchSection';
-import VoiceStudio from '@/components/VoiceStudio';
-import AppsSection from '@/components/AppsSection';
-import ApiKeysSection from '@/components/ApiKeysSection';
 import ArcReactor, { ReactorDock } from '@/components/ArcReactor';
 import LockScreen from '@/components/LockScreen';
 import { streamChat, streamImage, fileToDataUrl } from '@/lib/ai';
@@ -38,10 +19,6 @@ import { routeToAgent } from '@/lib/agents';
 import { memoryContext } from '@/lib/memory';
 import { logReasoning } from '@/lib/reasoningLog';
 import ChatSection from '@/components/ChatSection';
-import TranscriptSection from '@/components/TranscriptSection';
-import ImageGenSection from '@/components/ImageGenSection';
-import VoiceCommandsSection from '@/components/VoiceCommandsSection';
-import ContactsSection from '@/components/ContactsSection';
 import {
   TranscriptTurn, ChatSession, listTurns, listSessions, getActiveSessionId, openSession, addTurn, updateTurn, addVoiceClip, startNewSession,
   patchTurn, truncateAfter, restoreTurn, deleteTurn,
@@ -49,16 +26,41 @@ import {
 import { toast } from 'sonner';
 import { ChatMessages, ChatComposer } from '@/components/chat/ChatScreen';
 import { chatMedia, type ChatFile } from '@/lib/chat/mediaStore';
+import { validateAttachment } from '@/lib/chat/validate';
 import { classifyFile, dataUrlBytes, dataUrlMime, stripAttachmentLabel, withAttachmentLabel } from '@/lib/chat/files';
 import { previousUserTurn, replyPrefix, withReplyContext } from '@/lib/chat/ops';
-import HealthSection from '@/components/HealthSection';
-import AuditSection from '@/components/AuditSection';
 import { runTool, type ToolContext } from '@/lib/tools';
 import { AiError, type ToolCall, type ModelTier } from '@/lib/ai';
 import { rememberGeneratedImage } from '@/lib/generatedImage';
 import ActivityCenter from '@/components/ActivityCenter';
 import JarvisHardwarePanel from '@/components/JarvisHardwarePanel';
 import ArcMemoryNotice from '@/components/ArcMemoryNotice';
+
+// Panels load on demand so the first screen does not pay for every feature.
+const ApiKeysSection = lazy(() => import('@/components/ApiKeysSection'));
+const AppsSection = lazy(() => import('@/components/AppsSection'));
+const AuditSection = lazy(() => import('@/components/AuditSection'));
+const CallsSection = lazy(() => import('@/components/CallsSection'));
+const CameraSection = lazy(() => import('@/components/CameraSection'));
+const CarControlSection = lazy(() => import('@/components/CarControlSection'));
+const ContactsSection = lazy(() => import('@/components/ContactsSection'));
+const DashboardSection = lazy(() => import('@/components/DashboardSection'));
+const DocumentSection = lazy(() => import('@/components/DocumentSection'));
+const FilesSection = lazy(() => import('@/components/FilesSection'));
+const HealthSection = lazy(() => import('@/components/HealthSection'));
+const HouseSection = lazy(() => import('@/components/HouseSection'));
+const ImageAnalysisSection = lazy(() => import('@/components/ImageAnalysisSection'));
+const ImageGenSection = lazy(() => import('@/components/ImageGenSection'));
+const MissionControl = lazy(() => import('@/components/MissionControl'));
+const ResearchSection = lazy(() => import('@/components/ResearchSection'));
+const ShareSection = lazy(() => import('@/components/ShareSection'));
+const SystemAccessSection = lazy(() => import('@/components/SystemAccessSection'));
+const TranscriptSection = lazy(() => import('@/components/TranscriptSection'));
+const VideoStoryboardSection = lazy(() => import('@/components/VideoStoryboardSection'));
+const VoiceCommandsSection = lazy(() => import('@/components/VoiceCommandsSection'));
+const VoiceSection = lazy(() => import('@/components/VoiceSection'));
+const VoiceStudio = lazy(() => import('@/components/VoiceStudio'));
+const WhatsAppSection = lazy(() => import('@/components/WhatsAppSection'));
 
 const menuItems = [
   { id: 'api', icon: KeyRound, label: 'API' },
@@ -90,10 +92,12 @@ const menuItems = [
   { id: 'share', icon: Share2, label: 'Share' },
 ];
 
-pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
-  'pdfjs-dist/build/pdf.worker.min.mjs',
-  import.meta.url,
-).toString();
+/** pdf.js is large; load it only when a PDF is actually attached. */
+async function loadPdfJs() {
+  const pdfjsLib = await import('pdfjs-dist');
+  pdfjsLib.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/build/pdf.worker.min.mjs', import.meta.url).toString();
+  return pdfjsLib;
+}
 
 type ConsoleAttachment = {
   id: string;
@@ -141,6 +145,8 @@ const fromChatFile = (f: ChatFile): ConsoleAttachment | null => {
 };
 
 type AskOptions = { reuse?: TranscriptTurn; replyTo?: string };
+/** Per-run control: the abort signal for "stop generating" and an epoch that invalidates late callbacks. */
+type RunControl = { signal: AbortSignal; epoch: number };
 
 const Index = () => {
   const [locked, setLocked] = useState(true);
@@ -187,6 +193,9 @@ const Index = () => {
   const meterRef = useRef<LevelMeter | null>(null);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
   const generatingRef = useRef(false);
+  const abortRef = useRef<AbortController | null>(null);
+  // Bumped whenever a run is stopped or the conversation changes; callbacks from older runs check it and drop their output.
+  const epochRef = useRef(0);
   const mediaRef = useRef<MediaRecorder | null>(null);
   const clipRef = useRef<BlobPart[]>([]);
   const lastAudio = useRef<string | undefined>(undefined);
@@ -279,13 +288,14 @@ const Index = () => {
   }, [imageFullscreen]);
 
 
-  const generateConsoleImage = async (prompt: string, turnId?: string): Promise<boolean> => {
+  const generateConsoleImage = async (prompt: string, turnId?: string, signal?: AbortSignal, epoch?: number): Promise<boolean> => {
+    const live = () => epoch === undefined || epochRef.current === epoch;
     setImageGenerating(true);
     setImageError('');
 
     try {
       await streamImage(prompt, (dataUrl, isFinal) => {
-        if (!isFinal) return;
+        if (!isFinal || !live()) return;
 
         const image = new Image();
         image.onload = () => {
@@ -305,13 +315,14 @@ const Index = () => {
           setImageError('The generated image could not be decoded. Your previous image has been preserved.');
         };
         image.src = dataUrl;
-      });
-      return true;
+      }, undefined, signal);
+      return live();
     } catch (error) {
+      if (error instanceof AiError && error.code === 'aborted') return false;
       const message = error instanceof Error
         ? error.message
         : 'Unknown image-generation error.';
-      setImageError(message);
+      if (live()) setImageError(message);
       return false;
     } finally {
       setImageGenerating(false);
@@ -460,6 +471,19 @@ const Index = () => {
         continue;
       }
 
+      // Trust the bytes, not the name or declared type.
+      try {
+        const head = new Uint8Array(await file.slice(0, 4096).arrayBuffer());
+        const verdict = validateAttachment({ name: file.name, expected: isImage ? 'image' : isPdf ? 'pdf' : 'text', head, size: file.size });
+        if (verdict.ok === false) {
+          setAttachmentError(verdict.error);
+          continue;
+        }
+      } catch {
+        setAttachmentError(`Could not read ${file.name}.`);
+        continue;
+      }
+
       try {
         const item: ConsoleAttachment = {
           id: crypto.randomUUID(), file,
@@ -472,6 +496,7 @@ const Index = () => {
           }
           item.dataUrl = await fileToDataUrl(file);
         } else if (isPdf) {
+          const pdfjsLib = await loadPdfJs();
           const pdf = await pdfjsLib.getDocument({
             data: new Uint8Array(await file.arrayBuffer()),
           }).promise;
@@ -506,7 +531,9 @@ const Index = () => {
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
-  const runAsk = async (text: string, audio?: string, attached: ConsoleAttachment[] = [], opts: AskOptions = {}) => {
+  const runAsk = async (text: string, audio: string | undefined, attached: ConsoleAttachment[], opts: AskOptions, run: RunControl) => {
+    const { signal, epoch } = run;
+    const live = () => epochRef.current === epoch;
     const reuse = opts.reuse;
     if (!reuse && !text.trim() && !attached.length) return;
     const directive = (reuse ? stripAttachmentLabel(reuse.text).text : text).trim() || 'Please inspect and summarize the attached file(s).';
@@ -543,7 +570,11 @@ const Index = () => {
     if (!attached.length && (/\b(generate|create|make|draw|paint|design)\b.{0,100}\b(image|picture|artwork|illustration|logo|wallpaper|portrait|icon)\b/i.test(directive)
       || /\b(image|picture|artwork|illustration|logo|wallpaper)\b.{0,60}\b(of|showing|featuring)\b/i.test(directive)
       || /\b(draw|paint)\b/i.test(directive))) {
-      const succeeded = await generateConsoleImage(directive, exileTurn.id);
+      const succeeded = await generateConsoleImage(directive, exileTurn.id, signal, epoch);
+      if (!live() || signal.aborted) {
+        if (live()) { updateTurn(exileTurn.id, 'Image generation stopped.'); setReply(''); setState('idle'); }
+        return;
+      }
       const result = succeeded
         ? 'Image generated successfully in the Console.'
         : 'Image generation failed. See the image error displayed in the Console.';
@@ -558,6 +589,7 @@ const Index = () => {
     logReasoning(agent.name, 'Received directive', directive);
 
     const finish = (t: string, local = false) => {
+      if (!live()) return;
       updateTurn(exileTurn.id, t);
       if (local) patchTurn(exileTurn.id, { fallback: true });
       setReply(t);
@@ -596,26 +628,30 @@ const Index = () => {
       openSection: (id) => setPanel(id),
       approve: (summary) => new Promise<boolean>((resolve) => setPending({ summary, resolve })),
       generateImage: (prompt) => {
-        void generateConsoleImage(prompt, exileTurn.id);
+        void generateConsoleImage(prompt, exileTurn.id, signal, epoch);
       },
     };
 
+    let full = '';
+    let chunk = '';
     try {
-      let full = '';
       for (let hop = 0; hop < 4; hop++) {
+        if (signal.aborted) throw new AiError('aborted', 'Directive cancelled.');
         let calls: ToolCall[] = [];
-        let chunk = '';
+        chunk = '';
         await streamChat(
           'exile-chat',
           { messages: convo, tier },
           (d) => {
+            if (!live()) return;
             chunk += d;
             setReply(full + chunk);
             updateTurn(exileTurn.id, full + chunk);
           },
-          { onToolCalls: (c) => { calls = c; } },
+          { onToolCalls: (c) => { calls = c; }, signal },
         );
         full += chunk;
+        chunk = '';
         if (!calls.length) break;
 
         convo.push({
@@ -629,12 +665,14 @@ const Index = () => {
         });
 
         for (const call of calls) {
+          if (signal.aborted) throw new AiError('aborted', 'Directive cancelled.');
           logReasoning(agent.name, `Tool ${call.name}`, JSON.stringify(call.args ?? {}).slice(0, 120));
           const result = await runTool(call, toolCtx);
           convo.push({ role: 'tool', tool_call_id: result.id, content: result.output });
         }
       }
 
+      if (!live()) return;
       logReasoning(agent.name, 'Response delivered', full.slice(0, 120));
       if (full.trim()) finish(full);
       else {
@@ -642,6 +680,15 @@ const Index = () => {
         setState('idle');
       }
     } catch (err) {
+      if (!live()) return; // a newer run or a conversation change owns the UI now
+      if (signal.aborted || (err instanceof AiError && err.code === 'aborted')) {
+        // Keep what was already received; never fall through to the offline fallback for a deliberate stop.
+        const partial = (full + chunk).trim();
+        updateTurn(exileTurn.id, partial ? `${partial}\n\n— stopped` : '(stopped)');
+        setReply('');
+        setState('idle');
+        return;
+      }
       const reason = err instanceof AiError || err instanceof Error ? err.message : 'unknown fault';
       logReasoning(agent.name, 'Cloud link failed — local reasoning engaged', reason);
       if (imageAttachments.length) {
@@ -660,12 +707,34 @@ const Index = () => {
     }
     generatingRef.current = true;
     setGenerating(true);
+    const controller = new AbortController();
+    abortRef.current = controller;
+    const epoch = ++epochRef.current;
     try {
-      await runAsk(text, audio, attached, opts);
+      await runAsk(text, audio, attached, opts, { signal: controller.signal, epoch });
     } finally {
-      generatingRef.current = false;
-      setGenerating(false);
+      // Only release the busy state if this run is still the current one (a conversation change may have taken over).
+      if (abortRef.current === controller) {
+        abortRef.current = null;
+        generatingRef.current = false;
+        setGenerating(false);
+      }
     }
+  };
+
+  /** Stop the reply in progress: cancels the network read and keeps whatever text had arrived. */
+  const stopGeneration = () => {
+    abortRef.current?.abort();
+  };
+
+  /** Invalidate any run in progress (used when the conversation changes underneath it). */
+  const abandonRun = () => {
+    abortRef.current?.abort();
+    abortRef.current = null;
+    epochRef.current++;
+    generatingRef.current = false;
+    setGenerating(false);
+    setImageGenerating(false);
   };
 
   const sendFromComposer = () => void ask(input, undefined, attachments, { replyTo: replyTo?.id });
@@ -679,7 +748,7 @@ const Index = () => {
     chatMedia.delete(removed.map((t) => t.id));
     const { names } = stripAttachmentLabel(target.text);
     const files = chatMedia.get(target.id).filter((f) => f.origin === 'attached').map(fromChatFile).filter((f): f is ConsoleAttachment => !!f);
-    if (names.length > files.length) toast.info('Some attachments are no longer available (they are not kept after a reload). Only the text was resent.');
+    if (names.length > files.length) toast.info('Some attachments are no longer available (they are no longer stored on this device). Only the text was resent.');
     void ask('', undefined, files, { reuse: target });
   };
 
@@ -703,7 +772,15 @@ const Index = () => {
     if (!turn) return;
     deleteTurn(id);
     if (replyTo?.id === id) setReplyTo(null);
-    toast('Message deleted', { duration: 7000, action: { label: 'Undo', onClick: () => restoreTurn(turn, index) } });
+    // Stored media is only removed once the Undo window has passed; Undo keeps it.
+    let undone = false;
+    const finalize = () => { if (!undone) chatMedia.delete(id); };
+    toast('Message deleted', {
+      duration: 7000,
+      action: { label: 'Undo', onClick: () => { undone = true; restoreTurn(turn, index); } },
+      onDismiss: finalize,
+      onAutoClose: finalize,
+    });
   };
 
   const listen = async () => {
@@ -763,6 +840,7 @@ const Index = () => {
 
 
   const startNewChat = () => {
+    abandonRun();
     startNewSession();
     setInput("");
     setReply("");
@@ -795,7 +873,7 @@ const Index = () => {
           <span className="text-xs tracking-[0.2em] text-cyan-400/70">MESSAGES</span>
         </header>
         <main className="min-h-0 flex-1 overflow-hidden">
-          {renderPanel('whatsapp')}
+          <Suspense fallback={null}>{renderPanel('whatsapp')}</Suspense>
         </main>
       </div>
     );
@@ -914,6 +992,7 @@ const Index = () => {
               <button
                 key={session.id}
                 onClick={() => {
+                  abandonRun();
                   openSession(session.id);
                   setPanel(null);
                   setReply('');
@@ -1110,6 +1189,7 @@ const Index = () => {
           value={input}
           onChange={setInput}
           onSend={sendFromComposer}
+          onStop={stopGeneration}
           busy={generating}
           attachments={attachments.map((a) => ({ id: a.id, name: a.file.name, size: a.file.size, kind: a.kind, dataUrl: a.dataUrl }))}
           onRemoveAttachment={(id) => setAttachments((current) => current.filter((entry) => entry.id !== id))}
@@ -1247,7 +1327,7 @@ const Index = () => {
               </button>
             </div>
             <div className="rounded-lg border border-cyan-500/30 bg-slate-900/60 overflow-hidden">
-              {renderPanel(panel)}
+              <Suspense fallback={<div className="p-6 text-center text-xs tracking-widest text-cyan-300/60">LOADING…</div>}>{renderPanel(panel)}</Suspense>
             </div>
           </div>
         </div>

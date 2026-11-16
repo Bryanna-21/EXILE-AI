@@ -1,5 +1,5 @@
-// Local encrypted-at-rest (browser-scoped) persistent memory for EXILE.
-// Upgrades to Lovable Cloud when auth is enabled.
+// Local persistent memory for EXILE, stored as plain JSON in this browser profile's localStorage (NOT encrypted).
+// Can be upgraded to Supabase-backed storage when auth is enabled.
 
 export type MemoryCategory =
   | 'identity'

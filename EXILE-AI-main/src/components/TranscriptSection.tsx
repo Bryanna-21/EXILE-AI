@@ -1,3 +1,4 @@
+import { chatMedia } from "@/lib/chat/mediaStore";
 import { useEffect, useState } from "react";
 import { Trash2, FilePlus2, ArrowLeft, Download } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -98,7 +99,7 @@ const TranscriptSection = () => {
             <FilePlus2 className="w-4 h-4 mr-1" /> New
           </Button>
           {sessions.length > 0 && (
-            <Button variant="ghost" onClick={() => clearSessions()} className="text-red-300 text-xs">
+            <Button variant="ghost" onClick={() => { void chatMedia.wipe(); clearSessions(); }} className="text-red-300 text-xs">
               Clear all
             </Button>
           )}
@@ -125,7 +126,7 @@ const TranscriptSection = () => {
                 </div>
               </button>
               <button
-                onClick={() => deleteSession(s.id)}
+                onClick={() => { chatMedia.delete(s.turns.map((t) => t.id)); deleteSession(s.id); }}
                 aria-label="Delete conversation"
                 className="text-red-300/70 hover:text-red-200"
               >
