@@ -11,7 +11,7 @@ Deno.serve(async (req) => {
       prompt: string;
       attachments?: Array<{ kind: "image" | "file"; mime: string; dataUrl: string; name?: string }>;
     };
-    const key = Deno.env.get("LOVABLE_API_KEY");
+    const key = (Deno.env.get("AI_GATEWAY_API_KEY") ?? Deno.env.get("LOVABLE_API_KEY"));
     if (!key) return new Response(JSON.stringify({ error: "AI not configured" }), { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } });
 
     const content: any[] = [{ type: "text", text: prompt || "Analyze the attached material." }];
@@ -20,7 +20,7 @@ Deno.serve(async (req) => {
       else content.push({ type: "file", file: { filename: a.name || "file", file_data: a.dataUrl } });
     }
 
-    const r = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+    const r = await fetch(`${Deno.env.get("AI_GATEWAY_URL") ?? "https://ai.gateway.lovable.dev/v1"}/chat/completions`, {
       method: "POST",
       headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
       body: JSON.stringify({

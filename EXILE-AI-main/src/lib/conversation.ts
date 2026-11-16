@@ -9,7 +9,12 @@ export interface TranscriptTurn {
   role: "user" | "exile";
   text: string;
   at: number;
+  replyTo?: string;
+  edited?: boolean;
+  fallback?: boolean;
 }
+
+export type TurnExtras = Partial<Pick<TranscriptTurn, "replyTo" | "edited" | "fallback">>;
 
 export interface ChatSession {
   id: string;
@@ -117,9 +122,13 @@ export function listTurns(): TranscriptTurn[] {
   return listSessions().find((s) => s.id === id)?.turns ?? [];
 }
 
-export function addTurn(role: TranscriptTurn["role"], text: string): TranscriptTurn {
+function stripUndefined<T extends object>(o: T): T {
+  return Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined)) as T;
+}
+
+export function addTurn(role: TranscriptTurn["role"], text: string, extras: TurnExtras = {}): TranscriptTurn {
   const session = ensureSession();
-  const turn: TranscriptTurn = { id: crypto.randomUUID(), role, text, at: Date.now() };
+  const turn: TranscriptTurn = { id: crypto.randomUUID(), role, text, at: Date.now(), ...stripUndefined(extras) };
   const all = listSessions().map((s) =>
     s.id === session.id
       ? {
@@ -152,6 +161,39 @@ export function deleteTurn(id: string) {
   writeSessions(
     listSessions().map((s) => ({ ...s, turns: s.turns.filter((t) => t.id !== id) })),
   );
+}
+
+
+export function patchTurn(id: string, patch: Partial<Omit<TranscriptTurn, "id" | "role">>) {
+  const active = getActiveSessionId();
+  writeSessions(listSessions().map((s) =>
+    s.id === active
+      ? { ...s, updatedAt: Date.now(), turns: s.turns.map((t) => (t.id === id ? { ...t, ...patch } : t)) }
+      : s,
+  ));
+}
+
+export function truncateAfter(id: string): TranscriptTurn[] {
+  const active = getActiveSessionId();
+  let removed: TranscriptTurn[] = [];
+  writeSessions(listSessions().map((s) => {
+    if (s.id !== active) return s;
+    const index = s.turns.findIndex((t) => t.id === id);
+    if (index < 0) return s;
+    removed = s.turns.slice(index + 1);
+    return { ...s, updatedAt: Date.now(), turns: s.turns.slice(0, index + 1) };
+  }));
+  return removed;
+}
+
+export function restoreTurn(turn: TranscriptTurn, index: number) {
+  const active = getActiveSessionId();
+  writeSessions(listSessions().map((s) => {
+    if (s.id !== active || s.turns.some((t) => t.id === turn.id)) return s;
+    const turns = [...s.turns];
+    turns.splice(Math.max(0, Math.min(index, turns.length)), 0, turn);
+    return { ...s, updatedAt: Date.now(), turns };
+  }));
 }
 
 /* ---------------- voice log ---------------- */

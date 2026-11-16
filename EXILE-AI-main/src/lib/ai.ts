@@ -1,3 +1,5 @@
+import { readStreamAbortable, abortableSleep } from "./streamAbort";
+
 export const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL as string;
 export const SUPABASE_KEY = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY as string;
 
@@ -93,7 +95,6 @@ function classify(status: number, body: string): AiError {
   return new AiError("server", body?.slice(0, 200) || `HTTP ${status}`, status);
 }
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /** Fetch with a hard timeout, honouring an optional caller abort signal. */
 async function timedFetch(url: string, init: RequestInit, timeoutMs: number, signal?: AbortSignal) {
@@ -189,9 +190,7 @@ export async function streamChat(
       let full = "";
       const partials = new Map<number, PartialToolCall>();
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
+      await readStreamAbortable(reader, opts.signal, (value) => {
         buf += decoder.decode(value, { stream: true });
         let nl: number;
         while ((nl = buf.indexOf("\n")) !== -1) {
@@ -219,7 +218,7 @@ export async function streamChat(
             /* partial SSE frame */
           }
         }
-      }
+      });
 
       if (partials.size && opts.onToolCalls) {
         const calls: ToolCall[] = [...partials.values()]
@@ -238,10 +237,12 @@ export async function streamChat(
 
       return full;
     } catch (e) {
-      const err = e instanceof AiError ? e : new AiError("network", (e as Error).message);
+      const stopped = opts.signal?.aborted || (e as Error)?.name === "AbortError";
+      const err = stopped ? new AiError("aborted", "Directive cancelled.") : e instanceof AiError ? e : new AiError("network", (e as Error).message);
       lastError = err;
       if (!err.retryable || attempt === attempts) throw err;
-      await sleep(400 * 2 ** (attempt - 1));
+      try { await abortableSleep(400 * 2 ** (attempt - 1), opts.signal); }
+      catch { throw new AiError("aborted", "Directive cancelled."); }
     }
   }
 
@@ -256,6 +257,7 @@ export async function streamImage(
   prompt: string,
   onFrame: (dataUrl: string, isFinal: boolean) => void,
   model?: string,
+  signal?: AbortSignal,
 ): Promise<void> {
   // Desktop and localhost image generation must use the local model API.
   const isLocalApp =
@@ -293,6 +295,7 @@ export async function streamImage(
       body: JSON.stringify({ prompt, model }),
     },
     390_000,
+    signal,
   );
 
   if (!res.ok || !res.body) {
@@ -309,33 +312,36 @@ export async function streamImage(
   const decoder = new TextDecoder();
   let buf = "";
   let sawFinal = false;
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buf += decoder.decode(value, { stream: true });
-    let sep: number;
-    while ((sep = buf.indexOf("\n\n")) !== -1) {
-      const raw = buf.slice(0, sep);
-      buf = buf.slice(sep + 2);
-      let event = "";
-      let dataStr = "";
-      for (const line of raw.split("\n")) {
-        if (line.startsWith("event:")) event = line.slice(6).trim();
-        else if (line.startsWith("data:")) dataStr += line.slice(5).trim();
-      }
-      if (!dataStr || dataStr === "[DONE]") continue;
-      try {
-        const p = JSON.parse(dataStr);
-        if (event === "error" || p?.type === "error") throw new Error(p?.error?.message || "Image generation failed");
-        if (p?.b64_json) {
-          const isFinal = event === "image_generation.completed" || p.type === "image_generation.completed";
-          onFrame(`data:image/png;base64,${p.b64_json}`, isFinal);
-          if (isFinal) sawFinal = true;
+  try {
+    await readStreamAbortable(reader, signal, (value) => {
+      buf += decoder.decode(value, { stream: true });
+      let sep: number;
+      while ((sep = buf.indexOf("\n\n")) !== -1) {
+        const raw = buf.slice(0, sep);
+        buf = buf.slice(sep + 2);
+        let event = "";
+        let dataStr = "";
+        for (const line of raw.split("\n")) {
+          if (line.startsWith("event:")) event = line.slice(6).trim();
+          else if (line.startsWith("data:")) dataStr += line.slice(5).trim();
         }
-      } catch (e) {
-        if ((e as Error).message !== "Unexpected end of JSON input") throw e;
+        if (!dataStr || dataStr === "[DONE]") continue;
+        try {
+          const p = JSON.parse(dataStr);
+          if (event === "error" || p?.type === "error") throw new Error(p?.error?.message || "Image generation failed");
+          if (p?.b64_json) {
+            const isFinal = event === "image_generation.completed" || p.type === "image_generation.completed";
+            onFrame(`data:image/png;base64,${p.b64_json}`, isFinal);
+            if (isFinal) sawFinal = true;
+          }
+        } catch (e) {
+          if ((e as Error).message !== "Unexpected end of JSON input") throw e;
+        }
       }
-    }
+    });
+  } catch (e) {
+    if (signal?.aborted || (e as Error)?.name === "AbortError") throw new AiError("aborted", "Image generation cancelled.");
+    throw e;
   }
   if (!sawFinal) throw new AiError("server", "Image stream ended without a final frame");
 }

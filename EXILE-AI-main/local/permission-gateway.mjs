@@ -26,6 +26,9 @@ function canonicalize(value, seen = new Set()) {
     seen.add(value);
     const result = {};
     for (const key of Object.keys(value).sort()) {
+      if (key === "__proto__" || key === "constructor" || key === "prototype") {
+        throw new TypeError("Approval arguments must not contain reserved keys.");
+      }
       if (value[key] === undefined) throw new TypeError("Approval arguments must not contain undefined values.");
       result[key] = canonicalize(value[key], seen);
     }
@@ -35,10 +38,25 @@ function canonicalize(value, seen = new Set()) {
   throw new TypeError("Approval arguments must be JSON-compatible.");
 }
 
+const MAX_TRACKED_REQUESTS = 500;
+
 export class PermissionGateway {
-  constructor({ ttlMs = 10 * 60 * 1000 } = {}) {
+  constructor({ ttlMs = 10 * 60 * 1000, now = () => Date.now() } = {}) {
     this.requests = new Map();
     this.ttlMs = ttlMs;
+    this.now = now;
+  }
+
+  /** Drop settled/expired requests once the table grows, oldest first. */
+  _prune() {
+    if (this.requests.size < MAX_TRACKED_REQUESTS) return;
+    for (const [id, r] of this.requests) {
+      if (this.requests.size < MAX_TRACKED_REQUESTS * 0.8) break;
+      if (r.decision !== null || r.consumed || this._isExpired(r)) this.requests.delete(id);
+    }
+    if (this.requests.size >= MAX_TRACKED_REQUESTS) {
+      throw Object.assign(new Error("Too many pending approvals; resolve or cancel existing ones."), { statusCode: 429 });
+    }
   }
 
   static hashArgs(args) {
@@ -48,17 +66,18 @@ export class PermissionGateway {
 
   createRequest({ taskId, stepId, tool, args, risk }) {
     if (!taskId || !stepId || !tool) throw new TypeError("Approval requires taskId, stepId and tool.");
+    this._prune();
     const id = crypto.randomUUID();
     const token = crypto.randomBytes(32).toString("base64url");
     const record = {
       id, tokenHash: crypto.createHash("sha256").update(token).digest("hex"),
       taskId, stepId, tool, argsHash: PermissionGateway.hashArgs(args), risk,
       summary: describeOperation(tool, args, risk),
-      createdAt: new Date().toISOString(), decidedAt: null, decision: null,
+      createdAt: new Date(this.now()).toISOString(), decidedAt: null, decision: null,
       consumed: false,
     };
     this.requests.set(id, record);
-    return { requestId: id, token, summary: record.summary, tool, risk, expiresAt: new Date(Date.now() + this.ttlMs).toISOString() };
+    return { requestId: id, token, summary: record.summary, tool, risk, expiresAt: new Date(this.now() + this.ttlMs).toISOString() };
   }
 
   pendingForTask(taskId) {
@@ -74,13 +93,39 @@ export class PermissionGateway {
     return { ...safe };
   }
 
+  /** Withdraw an approval (pending or already approved but unused). Revoked grants can never authorize execution. */
+  revoke(requestId, reason = "revoked") {
+    const record = this.requests.get(String(requestId));
+    if (!record) return { ok: false, error: "Unknown approval request." };
+    if (record.consumed) return { ok: false, error: "Approval was already used." };
+    record.decision = "revoked";
+    record.revokedReason = String(reason).slice(0, 200);
+    record.decidedAt = new Date(this.now()).toISOString();
+    return { ok: true };
+  }
+
+  /** Revoke every unused approval for a task (cancel, pause, failure, timeout). */
+  revokeForTask(taskId, reason) {
+    let count = 0;
+    for (const record of this.requests.values()) {
+      if (record.taskId === taskId && !record.consumed && record.decision !== "revoked" && record.decision !== "refused") {
+        record.decision = "revoked";
+        record.revokedReason = String(reason ?? "task ended").slice(0, 200);
+        record.decidedAt = new Date(this.now()).toISOString();
+        count++;
+      }
+    }
+    return count;
+  }
+
   _isExpired(record) {
-    return Date.now() - Date.parse(record.createdAt) > this.ttlMs;
+    return this.now() - Date.parse(record.createdAt) > this.ttlMs;
   }
 
   decide({ requestId, token, approved, taskId, stepId, tool, args }) {
     const record = this.requests.get(String(requestId));
     if (!record) return { ok: false, error: "Unknown approval request." };
+    if (record.decision === "revoked") return { ok: false, error: "This approval was revoked." };
     if (record.decision !== null || record.consumed) return { ok: false, error: "This approval was already answered or consumed." };
     if (this._isExpired(record)) {
       record.decision = "expired";
@@ -99,17 +144,18 @@ export class PermissionGateway {
     catch (error) { return { ok: false, error: error.message }; }
     if (argsHash !== record.argsHash) {
       record.decision = "expired";
-      record.decidedAt = new Date().toISOString();
+      record.decidedAt = new Date(this.now()).toISOString();
       return { ok: false, error: "Arguments differ from the approved operation. A new approval is required." };
     }
     record.decision = approved === true ? "approved" : "refused";
-    record.decidedAt = new Date().toISOString();
+    record.decidedAt = new Date(this.now()).toISOString();
     return { ok: true, decision: record.decision };
   }
 
   authorizeExecution({ requestId, taskId, stepId, tool, args }) {
     const record = this.requests.get(String(requestId));
     if (!record) return { allowed: false, error: "No such approval request." };
+    if (record.decision === "revoked") return { allowed: false, error: "Approval was revoked." };
     if (record.decision !== "approved") return { allowed: false, error: "Operation has not been approved." };
     if (record.consumed) return { allowed: false, error: "Approval already used; approvals are single-use." };
     if (this._isExpired(record)) {

@@ -1,0 +1,60 @@
+/* ChatScreen styles. Colours reuse the EXILE cyan/slate palette and the gold used for attachments. */
+
+.chat-scroll { scrollbar-width: thin; scrollbar-color: rgb(34 211 238 / 0.25) transparent; overscroll-behavior: contain; }
+
+/* message entrance: outgoing slides in from the right, incoming from the left */
+@keyframes chat-in-right { from { opacity: 0; transform: translate3d(10px, 4px, 0) scale(0.98); } to { opacity: 1; transform: none; } }
+@keyframes chat-in-left  { from { opacity: 0; transform: translate3d(-10px, 4px, 0) scale(0.98); } to { opacity: 1; transform: none; } }
+.chat-in-user  { animation: chat-in-right 220ms var(--exile-motion-emphasis, cubic-bezier(0.16, 1, 0.3, 1)) both; transform-origin: bottom right; }
+.chat-in-exile { animation: chat-in-left 220ms var(--exile-motion-emphasis, cubic-bezier(0.16, 1, 0.3, 1)) both; transform-origin: bottom left; }
+
+/* thinking dots */
+@keyframes chat-dot { 0%, 80%, 100% { transform: translateY(0); opacity: 0.35; } 40% { transform: translateY(-4px); opacity: 1; } }
+.chat-dot { display: inline-block; width: 6px; height: 6px; border-radius: 9999px; background: rgb(103 232 249); animation: chat-dot 1.2s infinite ease-in-out; }
+.chat-dot:nth-child(2) { animation-delay: 0.15s; }
+.chat-dot:nth-child(3) { animation-delay: 0.3s; }
+
+/* streaming caret, appended after the last character while a reply is arriving */
+@keyframes chat-caret { 50% { opacity: 0; } }
+.chat-streaming .chat-body > :last-child::after,
+.chat-streaming .chat-body > :last-child .chat-code-body code::after {
+  content: ""; display: inline-block; width: 0.5ch; height: 1.1em; margin-left: 2px; vertical-align: text-bottom;
+  background: rgb(103 232 249); animation: chat-caret 1s steps(1) infinite;
+}
+
+/* sending spinner */
+@keyframes chat-spin { to { transform: rotate(360deg); } }
+.chat-spin { animation: chat-spin 0.9s linear infinite; }
+
+/* message text is always selectable (including on touch) */
+.chat-body, .chat-body * { -webkit-user-select: text; user-select: text; }
+.chat-body { overflow-wrap: anywhere; word-break: break-word; }
+
+/* syntax tokens (Lezer classHighlighter) */
+.chat-code-body .tok-keyword, .chat-code-body .tok-operatorKeyword, .chat-code-body .tok-modifier, .chat-code-body .tok-controlKeyword { color: #c4b5fd; }
+.chat-code-body .tok-string, .chat-code-body .tok-string2, .chat-code-body .tok-regexp { color: #86efac; }
+.chat-code-body .tok-number, .chat-code-body .tok-bool, .chat-code-body .tok-atom, .chat-code-body .tok-literal { color: #fdba74; }
+.chat-code-body .tok-comment { color: #64748b; font-style: italic; }
+.chat-code-body .tok-typeName, .chat-code-body .tok-className, .chat-code-body .tok-namespace { color: #67e8f9; }
+.chat-code-body .tok-propertyName, .chat-code-body .tok-attributeName { color: #7dd3fc; }
+.chat-code-body .tok-variableName.tok-definition, .chat-code-body .tok-function { color: #fde68a; }
+.chat-code-body .tok-meta, .chat-code-body .tok-heading, .chat-code-body .tok-tagName { color: #f9a8d4; }
+.chat-code-body .tok-link, .chat-code-body .tok-url { color: #7dd3fc; text-decoration: underline; }
+.chat-code-body .tok-operator, .chat-code-body .tok-punctuation { color: #94a3b8; }
+
+/* actions stay reachable on touch: always visible where hover does not exist */
+.chat-actions-trigger { opacity: 0; transition: opacity 120ms ease; }
+.chat-row:hover .chat-actions-trigger, .chat-row:focus-within .chat-actions-trigger, .chat-actions-trigger[data-state="open"] { opacity: 1; }
+@media (hover: none) { .chat-actions-trigger { opacity: 0.85; } }
+
+/* never let anything push the page sideways */
+.chat-row, .chat-bubble { min-width: 0; max-width: 100%; }
+.chat-bubble img, .chat-bubble video { max-width: 100%; }
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-in-user, .chat-in-exile, .chat-dot, .chat-spin { animation: none !important; }
+  .chat-dot { opacity: 0.8; }
+  .chat-streaming .chat-body > :last-child::after,
+  .chat-streaming .chat-body > :last-child .chat-code-body code::after { animation: none; }
+  .chat-actions-trigger { transition: none; }
+}

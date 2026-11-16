@@ -12,6 +12,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
 const v = require("./validation.cjs");
+const { renameSyncRetry } = require("../../local/fs-retry.cjs");
 
 const STORE_VERSION = 1;
 const SOURCES = new Set(["manual", "discovered", "shortcut"]);
@@ -28,7 +29,7 @@ function writeJsonAtomic(file, data) {
     } finally {
       fs.closeSync(fd);
     }
-    fs.renameSync(tmp, file);
+    renameSyncRetry(fs, tmp, file);
   } catch (error) {
     try { fs.unlinkSync(tmp); } catch { /* temp file may not exist */ }
     throw error;

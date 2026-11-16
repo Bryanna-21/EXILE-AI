@@ -1,8 +1,13 @@
-const { app, BrowserWindow, shell, ipcMain, dialog } = require("electron");
+const { app, BrowserWindow, shell, ipcMain, dialog, session } = require("electron");
 const path = require("node:path");
-const { registerNativeAppIpc } = require("./native-apps/index.cjs");
+const { registerNativeAppIpc, isTrustedSender } = require("./native-apps/index.cjs");
 const fs = require("node:fs");
 const { spawn } = require("node:child_process");
+const crypto = require("node:crypto");
+const { fileURLToPath } = require("node:url");
+
+// Per-launch secret for the local API. Kept in memory only and never exposed to renderer JS.
+const LOCAL_API_SECRET = crypto.randomBytes(32).toString("base64url");
 const os = require("node:os");
 
 if (process.platform === "win32") {
@@ -25,6 +30,44 @@ let apiProc = null;
 let apiLogStream = null;
 let mainWindow = null;
 let companionWindow = null;
+const trustedApiWebContents = new Set();
+
+function trustApiWebContents(win) {
+  const wc = win.webContents;
+  trustedApiWebContents.add(wc.id);
+  wc.once("destroyed", () => {
+    trustedApiWebContents.delete(wc.id);
+  });
+}
+
+/**
+ * Attach local API authentication in Chromium's main process.
+ * Only the two trusted EXILE windows receive the header, and only for loopback URLs.
+ */
+function configureLocalApiRequestAuth() {
+  session.defaultSession.webRequest.onBeforeSendHeaders(
+    { urls: ["http://localhost/*", "http://127.0.0.1/*"] },
+    (details, callback) => {
+      const requestHeaders = { ...details.requestHeaders };
+      let hostname = "";
+
+      try {
+        hostname = new URL(details.url).hostname;
+      } catch {
+        // Leave malformed destinations untouched.
+      }
+
+      if (
+        trustedApiWebContents.has(details.webContentsId) &&
+        (hostname === "localhost" || hostname === "127.0.0.1")
+      ) {
+        requestHeaders["x-exile-local-auth"] = LOCAL_API_SECRET;
+      }
+
+      callback({ requestHeaders });
+    },
+  );
+}
 
 async function startLocalApi() {
   const appRoot = app.getAppPath();
@@ -53,6 +96,7 @@ async function startLocalApi() {
         ...process.env,
         ELECTRON_RUN_AS_NODE: "1",
         EXILE_PORT: port,
+        EXILE_LOCAL_API_SECRET: LOCAL_API_SECRET,
         ...(app.isPackaged ? {
           EXILE_DATA_DIR: dataDir,
           EXILE_TASK_STORE_DIR: path.join(dataDir, ".exile-ai", "tasks"),
@@ -130,18 +174,59 @@ function stopLocalApi() {
   }
 }
 
+function openExternalSafely(url) {
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol === "https:" || parsed.protocol === "http:") shell.openExternal(url);
+  } catch {
+    // Ignore malformed or unsupported external URLs.
+  }
+}
+
+// Permissions the UI genuinely uses (microphone/camera for voice and capture, user-initiated location in System Access, clipboard writes, fullscreen,
+// notifications). Everything else (MIDI, USB, HID, serial, ...) is denied, and only for the app's
+// own file:// pages; Electron's default is to grant every request.
+const ALLOWED_PERMISSIONS = new Set(["media", "geolocation", "clipboard-sanitized-write", "fullscreen", "notifications"]);
+
+function configureWindowSecurity(win) {
+  const wc = win.webContents;
+
+  wc.setWindowOpenHandler(({ url }) => {
+    openExternalSafely(url);
+    return { action: "deny" };
+  });
+
+  // The preload bridge (native app launching, the local API secret) must never be attached to a remote page.
+  // The window may only ever show the bundled index.html; any other navigation is refused, and web links open
+  // in the system browser instead.
+  const guardNavigation = (event, url) => {
+    let same = false;
+    try {
+      const target = new URL(url);
+      same = target.protocol === "file:" && path.resolve(fileURLToPath(target)) === path.resolve(__dirname, "..", "dist", "index.html");
+    } catch {
+      same = false;
+    }
+    if (!same) {
+      event.preventDefault();
+      openExternalSafely(url);
+    }
+  };
+  wc.on("will-navigate", guardNavigation);
+  wc.on("will-redirect", guardNavigation);
+  wc.on("will-attach-webview", (event) => event.preventDefault());
+
+  wc.session.setPermissionRequestHandler((contents, permission, callback, details) => {
+    const origin = String(details?.requestingUrl || contents.getURL() || "");
+    callback(origin.startsWith("file://") && ALLOWED_PERMISSIONS.has(permission));
+  });
+  wc.session.setPermissionCheckHandler((contents, permission, requestingOrigin) => {
+    return String(requestingOrigin || "").startsWith("file://") && ALLOWED_PERMISSIONS.has(permission);
+  });
+}
+
 function configureExternalLinks(win) {
-win.webContents.setWindowOpenHandler(({ url }) => {
-try {
-const parsed = new URL(url);
-if (parsed.protocol === "https:" || parsed.protocol === "http:") {
-shell.openExternal(url);
-}
-} catch {
-// Ignore malformed or unsupported external URLs.
-}
-return { action: "deny" };
-});
+  configureWindowSecurity(win);
 }
 
 function createWindow() {
@@ -165,6 +250,7 @@ sandbox: true,
 },
 });
 
+trustApiWebContents(mainWindow);
 mainWindow.loadFile(path.join(__dirname, "..", "dist", "index.html"));
 configureExternalLinks(mainWindow);
 mainWindow.on("closed", () => {
@@ -202,6 +288,7 @@ sandbox: true,
 },
 });
 
+trustApiWebContents(companionWindow);
 companionWindow.loadFile(
 path.join(__dirname, "..", "dist", "index.html"),
 { query: { exileWindow: "companion" } },
@@ -225,7 +312,7 @@ return companionWindow;
 
 ipcMain.handle("exile:venom-synthesize", async (event, text, profileId) => {
   // Only the local Electron UI may request speech synthesis.
-  if (!event.senderFrame?.url?.startsWith("file://")) return null;
+  if (!isTrustedSender(event, path.resolve(__dirname, "..", "dist", "index.html"), process.platform)) return null;
   if (typeof text !== "string" || !text.trim() || text.length > 3000) {
     return null;
   }
@@ -352,6 +439,7 @@ if (!gotTheLock) {
   });
 
   app.whenReady().then(async () => {
+    configureLocalApiRequestAuth();
     // Native application import/launch: main-process only, narrow IPC surface.
     try {
       registerNativeAppIpc({ ipcMain, app, dialog, shell, BrowserWindow });

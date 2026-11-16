@@ -1,34 +1,12 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
-import * as pdfjsLib from 'pdfjs-dist';
+import { Suspense, lazy, useEffect, useRef, useState } from 'react';
 import {
   MessageCircle, Camera, Search, Mic, Files, Share2, Wifi, WifiOff, Activity,
   MessageSquare, Phone, ShieldCheck, Home, Car, LayoutDashboard, Wand2, Film,
-  FileText, BookOpen, Settings, Send, X, AudioLines, Grid3x3, KeyRound,
+  FileText, BookOpen, Settings, X, AudioLines, Grid3x3, KeyRound,
   History, FilePlus2, Radio, Contact2, Menu, Volume2, VolumeX,
-  Paperclip, FileText as AttachmentFileIcon,
 } from 'lucide-react';
 
-import { Button } from '@/components/ui/button';
-import CodeCanvas from '@/components/CodeCanvas';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
-import CameraSection from '@/components/CameraSection';
-import FilesSection from '@/components/FilesSection';
-import ShareSection from '@/components/ShareSection';
-import VoiceSection from '@/components/VoiceSection';
-import ImageAnalysisSection from '@/components/ImageAnalysisSection';
-import WhatsAppSection from '@/components/WhatsAppSection';
-import CallsSection from '@/components/CallsSection';
-import DashboardSection from '@/components/DashboardSection';
-import SystemAccessSection from '@/components/SystemAccessSection';
-import HouseSection from '@/components/HouseSection';
-import CarControlSection from '@/components/CarControlSection';
-import MissionControl from '@/components/MissionControl';
-import VideoStoryboardSection from '@/components/VideoStoryboardSection';
-import DocumentSection from '@/components/DocumentSection';
-import ResearchSection from '@/components/ResearchSection';
-import VoiceStudio from '@/components/VoiceStudio';
-import AppsSection from '@/components/AppsSection';
-import ApiKeysSection from '@/components/ApiKeysSection';
 import ArcReactor, { ReactorDock } from '@/components/ArcReactor';
 import LockScreen from '@/components/LockScreen';
 import { streamChat, streamImage, fileToDataUrl } from '@/lib/ai';
@@ -41,21 +19,48 @@ import { routeToAgent } from '@/lib/agents';
 import { memoryContext } from '@/lib/memory';
 import { logReasoning } from '@/lib/reasoningLog';
 import ChatSection from '@/components/ChatSection';
-import TranscriptSection from '@/components/TranscriptSection';
-import ImageGenSection from '@/components/ImageGenSection';
-import VoiceCommandsSection from '@/components/VoiceCommandsSection';
-import ContactsSection from '@/components/ContactsSection';
 import {
   TranscriptTurn, ChatSession, listTurns, listSessions, getActiveSessionId, openSession, addTurn, updateTurn, addVoiceClip, startNewSession,
+  patchTurn, truncateAfter, restoreTurn, deleteTurn,
 } from '@/lib/conversation';
-import HealthSection from '@/components/HealthSection';
-import AuditSection from '@/components/AuditSection';
+import { toast } from 'sonner';
+import { ChatMessages, ChatComposer } from '@/components/chat/ChatScreen';
+import { chatMedia, type ChatFile } from '@/lib/chat/mediaStore';
+import { validateAttachment } from '@/lib/chat/validate';
+import { classifyFile, dataUrlBytes, dataUrlMime, stripAttachmentLabel, withAttachmentLabel } from '@/lib/chat/files';
+import { previousUserTurn, replyPrefix, withReplyContext } from '@/lib/chat/ops';
 import { runTool, type ToolContext } from '@/lib/tools';
 import { AiError, type ToolCall, type ModelTier } from '@/lib/ai';
 import { rememberGeneratedImage } from '@/lib/generatedImage';
 import ActivityCenter from '@/components/ActivityCenter';
 import JarvisHardwarePanel from '@/components/JarvisHardwarePanel';
 import ArcMemoryNotice from '@/components/ArcMemoryNotice';
+
+// Panels load on demand so the first screen does not pay for every feature.
+const ApiKeysSection = lazy(() => import('@/components/ApiKeysSection'));
+const AppsSection = lazy(() => import('@/components/AppsSection'));
+const AuditSection = lazy(() => import('@/components/AuditSection'));
+const CallsSection = lazy(() => import('@/components/CallsSection'));
+const CameraSection = lazy(() => import('@/components/CameraSection'));
+const CarControlSection = lazy(() => import('@/components/CarControlSection'));
+const ContactsSection = lazy(() => import('@/components/ContactsSection'));
+const DashboardSection = lazy(() => import('@/components/DashboardSection'));
+const DocumentSection = lazy(() => import('@/components/DocumentSection'));
+const FilesSection = lazy(() => import('@/components/FilesSection'));
+const HealthSection = lazy(() => import('@/components/HealthSection'));
+const HouseSection = lazy(() => import('@/components/HouseSection'));
+const ImageAnalysisSection = lazy(() => import('@/components/ImageAnalysisSection'));
+const ImageGenSection = lazy(() => import('@/components/ImageGenSection'));
+const MissionControl = lazy(() => import('@/components/MissionControl'));
+const ResearchSection = lazy(() => import('@/components/ResearchSection'));
+const ShareSection = lazy(() => import('@/components/ShareSection'));
+const SystemAccessSection = lazy(() => import('@/components/SystemAccessSection'));
+const TranscriptSection = lazy(() => import('@/components/TranscriptSection'));
+const VideoStoryboardSection = lazy(() => import('@/components/VideoStoryboardSection'));
+const VoiceCommandsSection = lazy(() => import('@/components/VoiceCommandsSection'));
+const VoiceSection = lazy(() => import('@/components/VoiceSection'));
+const VoiceStudio = lazy(() => import('@/components/VoiceStudio'));
+const WhatsAppSection = lazy(() => import('@/components/WhatsAppSection'));
 
 const menuItems = [
   { id: 'api', icon: KeyRound, label: 'API' },
@@ -87,10 +92,12 @@ const menuItems = [
   { id: 'share', icon: Share2, label: 'Share' },
 ];
 
-pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
-  'pdfjs-dist/build/pdf.worker.min.mjs',
-  import.meta.url,
-).toString();
+/** pdf.js is large; load it only when a PDF is actually attached. */
+async function loadPdfJs() {
+  const pdfjsLib = await import('pdfjs-dist');
+  pdfjsLib.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/build/pdf.worker.min.mjs', import.meta.url).toString();
+  return pdfjsLib;
+}
 
 type ConsoleAttachment = {
   id: string;
@@ -100,6 +107,7 @@ type ConsoleAttachment = {
   extractedText?: string;
 };
 
+const ATTACHMENT_ACCEPT = 'image/png,image/jpeg,image/webp,application/pdf,text/plain,application/json,.txt,.md,.markdown,.csv,.json,.log,.xml,.yaml,.yml,.toml,.js,.jsx,.ts,.tsx,.py,.html,.css,.sql,.java,.c,.h,.cpp,.hpp,.rs,.go,.sh';
 const MAX_ATTACHMENTS = 5;
 const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
 const MAX_TOTAL_ATTACHMENT_BYTES = 15 * 1024 * 1024;
@@ -113,45 +121,32 @@ const MEDIA_PANELS = new Set(['cinema', 'camera', 'analysis', 'docs', 'files']);
 
 
 
-function renderExileMessage(text: string): ReactNode[] {
-  const pattern = /```([a-zA-Z0-9_+#.-]*)[ \t]*\r?\n([\s\S]*?)```/g;
-  const nodes: ReactNode[] = [];
-  let cursor = 0;
-  let index = 0;
+const toChatFile = (a: ConsoleAttachment): ChatFile => ({
+  id: a.id,
+  name: a.file.name,
+  mime: a.file.type || 'application/octet-stream',
+  size: a.file.size,
+  kind: classifyFile(a.file.name, a.file.type),
+  file: a.file,
+  dataUrl: a.dataUrl,
+  text: a.extractedText,
+  origin: 'attached',
+});
 
-  for (const match of text.matchAll(pattern)) {
-    const start = match.index ?? 0;
+const fromChatFile = (f: ChatFile): ConsoleAttachment | null => {
+  if (!f.file) return null;
+  return {
+    id: f.id,
+    file: f.file instanceof File ? f.file : new File([f.file], f.name, { type: f.mime }),
+    kind: f.kind === 'image' ? 'image' : f.kind === 'pdf' ? 'pdf' : 'text',
+    dataUrl: f.dataUrl,
+    extractedText: f.text,
+  };
+};
 
-    if (start > cursor) {
-      nodes.push(
-          <span key={`text-${index++}`} className="whitespace-pre-wrap">
-            {text.slice(cursor, start)}
-          </span>
-        );
-      }
-
-    const code = match[2].replace(/\r?\n$/, "");
-    if (code.trim()) {
-      nodes.push(
-        <div key={`code-${index++}`} className="my-3 text-left">
-          <CodeCanvas code={code} language={match[1] || undefined} />
-        </div>,
-      );
-    }
-
-    cursor = start + match[0].length;
-  }
-
-  if (cursor < text.length) {
-    nodes.push(
-      <span key={`text-${index++}`} className="whitespace-pre-wrap">
-        {text.slice(cursor)}
-      </span>,
-    );
-  }
-
-  return nodes;
-}
+type AskOptions = { reuse?: TranscriptTurn; replyTo?: string };
+/** Per-run control: the abort signal for "stop generating" and an epoch that invalidates late callbacks. */
+type RunControl = { signal: AbortSignal; epoch: number };
 
 const Index = () => {
   const [locked, setLocked] = useState(true);
@@ -171,6 +166,8 @@ const Index = () => {
   const [reply, setReply] = useState('');
   const [attachments, setAttachments] = useState<ConsoleAttachment[]>([]);
   const [attachmentError, setAttachmentError] = useState('');
+  const [generating, setGenerating] = useState(false);
+  const [replyTo, setReplyTo] = useState<TranscriptTurn | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [muted, setMuted] = useState<boolean>(() => {
     try {
@@ -194,7 +191,11 @@ const Index = () => {
   const [level, setLevel] = useState(0);
   const recRef = useRef<any>(null);
   const meterRef = useRef<LevelMeter | null>(null);
-  const feedRef = useRef<HTMLDivElement | null>(null);
+  const composerRef = useRef<HTMLTextAreaElement | null>(null);
+  const generatingRef = useRef(false);
+  const abortRef = useRef<AbortController | null>(null);
+  // Bumped whenever a run is stopped or the conversation changes; callbacks from older runs check it and drop their output.
+  const epochRef = useRef(0);
   const mediaRef = useRef<MediaRecorder | null>(null);
   const clipRef = useRef<BlobPart[]>([]);
   const lastAudio = useRef<string | undefined>(undefined);
@@ -276,10 +277,6 @@ const Index = () => {
   }, []);
 
   useEffect(() => {
-    feedRef.current?.scrollTo({ top: feedRef.current.scrollHeight, behavior: 'smooth' });
-  }, [turns, reply]);
-
-  useEffect(() => {
     if (!imageFullscreen) return;
 
     const handleEscape = (event: KeyboardEvent) => {
@@ -291,31 +288,41 @@ const Index = () => {
   }, [imageFullscreen]);
 
 
-  const generateConsoleImage = async (prompt: string): Promise<boolean> => {
+  const generateConsoleImage = async (prompt: string, turnId?: string, signal?: AbortSignal, epoch?: number): Promise<boolean> => {
+    const live = () => epoch === undefined || epochRef.current === epoch;
     setImageGenerating(true);
     setImageError('');
 
     try {
       await streamImage(prompt, (dataUrl, isFinal) => {
-        if (!isFinal) return;
+        if (!isFinal || !live()) return;
 
         const image = new Image();
         image.onload = () => {
           setGeneratedImage({ dataUrl, prompt });
           rememberGeneratedImage(dataUrl, prompt);
+          if (turnId) {
+            const mime = dataUrlMime(dataUrl);
+            chatMedia.append(turnId, {
+              id: crypto.randomUUID(),
+              name: `exile-image-${Date.now()}.${mime === 'image/jpeg' ? 'jpg' : mime === 'image/webp' ? 'webp' : 'png'}`,
+              mime, size: dataUrlBytes(dataUrl), kind: 'image', dataUrl, origin: 'generated', prompt,
+            });
+          }
           setImageError('');
         };
         image.onerror = () => {
           setImageError('The generated image could not be decoded. Your previous image has been preserved.');
         };
         image.src = dataUrl;
-      });
-      return true;
+      }, undefined, signal);
+      return live();
     } catch (error) {
+      if (error instanceof AiError && error.code === 'aborted') return false;
       const message = error instanceof Error
         ? error.message
         : 'Unknown image-generation error.';
-      setImageError(message);
+      if (live()) setImageError(message);
       return false;
     } finally {
       setImageGenerating(false);
@@ -464,6 +471,19 @@ const Index = () => {
         continue;
       }
 
+      // Trust the bytes, not the name or declared type.
+      try {
+        const head = new Uint8Array(await file.slice(0, 4096).arrayBuffer());
+        const verdict = validateAttachment({ name: file.name, expected: isImage ? 'image' : isPdf ? 'pdf' : 'text', head, size: file.size });
+        if (verdict.ok === false) {
+          setAttachmentError(verdict.error);
+          continue;
+        }
+      } catch {
+        setAttachmentError(`Could not read ${file.name}.`);
+        continue;
+      }
+
       try {
         const item: ConsoleAttachment = {
           id: crypto.randomUUID(), file,
@@ -476,6 +496,7 @@ const Index = () => {
           }
           item.dataUrl = await fileToDataUrl(file);
         } else if (isPdf) {
+          const pdfjsLib = await loadPdfJs();
           const pdf = await pdfjsLib.getDocument({
             data: new Uint8Array(await file.arrayBuffer()),
           }).promise;
@@ -510,27 +531,36 @@ const Index = () => {
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
-  const ask = async (text: string, audio?: string, attached: ConsoleAttachment[] = []) => {
-    if (!text.trim() && !attached.length) return;
-    const directive = text.trim() || 'Please inspect and summarize the attached file(s).';
+  const runAsk = async (text: string, audio: string | undefined, attached: ConsoleAttachment[], opts: AskOptions, run: RunControl) => {
+    const { signal, epoch } = run;
+    const live = () => epochRef.current === epoch;
+    const reuse = opts.reuse;
+    if (!reuse && !text.trim() && !attached.length) return;
+    const directive = (reuse ? stripAttachmentLabel(reuse.text).text : text).trim() || 'Please inspect and summarize the attached file(s).';
     const attachmentLabels = attached.length
       ? `\n\n[Attached files: ${attached.map((item) => item.file.name).join(', ')}]`
       : '';
-    const userTurnText = `${directive}${attachmentLabels}`;
+    const userTurnText = reuse ? reuse.text : `${directive}${attachmentLabels}`;
     const extracted = attached
       .filter((item) => item.extractedText)
       .map((item) => `\n\n[Attached file: ${item.file.name}]\n${item.extractedText}`)
       .join('');
-    const promptWithFiles = `${directive}${extracted}`.slice(0, MAX_COMBINED_PROMPT);
+    const filesPrompt = `${directive}${extracted}`;
     const imageAttachments = attached.filter((item) => item.kind === 'image' && item.dataUrl);
-    setInput('');
-    setAttachments([]);
-    setAttachmentError('');
+    const replyToId = opts.replyTo;
+    if (!reuse) {
+      setInput('');
+      setAttachments([]);
+      setAttachmentError('');
+      setReplyTo(null);
+    }
     setReply('');
     stopMeter();
     setState('thinking');
 
-    const userTurn = addTurn('user', userTurnText);
+    const userTurn = reuse ?? addTurn('user', userTurnText, replyToId ? { replyTo: replyToId } : {});
+    if (!reuse && attached.length) chatMedia.set(userTurn.id, attached.map(toChatFile));
+    const promptWithFiles = `${replyPrefix(userTurn, listTurns())}${filesPrompt}`.slice(0, MAX_COMBINED_PROMPT);
     if (audio !== undefined) {
       addVoiceClip({ id: crypto.randomUUID(), audio, transcript: directive, at: Date.now() });
     }
@@ -540,7 +570,11 @@ const Index = () => {
     if (!attached.length && (/\b(generate|create|make|draw|paint|design)\b.{0,100}\b(image|picture|artwork|illustration|logo|wallpaper|portrait|icon)\b/i.test(directive)
       || /\b(image|picture|artwork|illustration|logo|wallpaper)\b.{0,60}\b(of|showing|featuring)\b/i.test(directive)
       || /\b(draw|paint)\b/i.test(directive))) {
-      const succeeded = await generateConsoleImage(directive);
+      const succeeded = await generateConsoleImage(directive, exileTurn.id, signal, epoch);
+      if (!live() || signal.aborted) {
+        if (live()) { updateTurn(exileTurn.id, 'Image generation stopped.'); setReply(''); setState('idle'); }
+        return;
+      }
       const result = succeeded
         ? 'Image generated successfully in the Console.'
         : 'Image generation failed. See the image error displayed in the Console.';
@@ -554,8 +588,10 @@ const Index = () => {
     const agent = routeToAgent(directive);
     logReasoning(agent.name, 'Received directive', directive);
 
-    const finish = (t: string) => {
+    const finish = (t: string, local = false) => {
+      if (!live()) return;
       updateTurn(exileTurn.id, t);
+      if (local) patchTurn(exileTurn.id, { fallback: true });
       setReply(t);
       say(t);
     };
@@ -564,18 +600,19 @@ const Index = () => {
       if (imageAttachments.length) {
         return finish('Image analysis requires an online AI provider with vision support. The attached image was not analyzed.');
       }
-      return finish(offlineRespond(promptWithFiles).text);
+      return finish(offlineRespond(filesPrompt).text, true);
     }
 
+    const history = listTurns();
     const convo: Record<string, unknown>[] = [
       ...(memoryContext() ? [{ role: 'system', content: memoryContext() }] : []),
       { role: 'system', content: getExilePersonalityPrompt(isVenomModeEnabled()) },
       { role: 'system', content: `Active agent: ${agent.name}. ${agent.systemPrompt}` },
-      ...listTurns()
+      ...history
         .slice(-20)
         .filter((t) => t.text && t.text !== '…' && t.id !== exileTurn.id)
         .map((t) => {
-          if (t.id !== userTurn.id) return { role: t.role === 'user' ? 'user' : 'assistant', content: t.text };
+          if (t.id !== userTurn.id) return { role: t.role === 'user' ? 'user' : 'assistant', content: withReplyContext(t, history) };
           const contentText = promptWithFiles;
           const content = imageAttachments.length
             ? [
@@ -591,26 +628,30 @@ const Index = () => {
       openSection: (id) => setPanel(id),
       approve: (summary) => new Promise<boolean>((resolve) => setPending({ summary, resolve })),
       generateImage: (prompt) => {
-        void generateConsoleImage(prompt);
+        void generateConsoleImage(prompt, exileTurn.id, signal, epoch);
       },
     };
 
+    let full = '';
+    let chunk = '';
     try {
-      let full = '';
       for (let hop = 0; hop < 4; hop++) {
+        if (signal.aborted) throw new AiError('aborted', 'Directive cancelled.');
         let calls: ToolCall[] = [];
-        let chunk = '';
+        chunk = '';
         await streamChat(
           'exile-chat',
           { messages: convo, tier },
           (d) => {
+            if (!live()) return;
             chunk += d;
             setReply(full + chunk);
             updateTurn(exileTurn.id, full + chunk);
           },
-          { onToolCalls: (c) => { calls = c; } },
+          { onToolCalls: (c) => { calls = c; }, signal },
         );
         full += chunk;
+        chunk = '';
         if (!calls.length) break;
 
         convo.push({
@@ -624,12 +665,14 @@ const Index = () => {
         });
 
         for (const call of calls) {
+          if (signal.aborted) throw new AiError('aborted', 'Directive cancelled.');
           logReasoning(agent.name, `Tool ${call.name}`, JSON.stringify(call.args ?? {}).slice(0, 120));
           const result = await runTool(call, toolCtx);
           convo.push({ role: 'tool', tool_call_id: result.id, content: result.output });
         }
       }
 
+      if (!live()) return;
       logReasoning(agent.name, 'Response delivered', full.slice(0, 120));
       if (full.trim()) finish(full);
       else {
@@ -637,14 +680,107 @@ const Index = () => {
         setState('idle');
       }
     } catch (err) {
+      if (!live()) return; // a newer run or a conversation change owns the UI now
+      if (signal.aborted || (err instanceof AiError && err.code === 'aborted')) {
+        // Keep what was already received; never fall through to the offline fallback for a deliberate stop.
+        const partial = (full + chunk).trim();
+        updateTurn(exileTurn.id, partial ? `${partial}\n\n— stopped` : '(stopped)');
+        setReply('');
+        setState('idle');
+        return;
+      }
       const reason = err instanceof AiError || err instanceof Error ? err.message : 'unknown fault';
       logReasoning(agent.name, 'Cloud link failed — local reasoning engaged', reason);
       if (imageAttachments.length) {
         finish(`I couldn't analyze the attached image. Check that your online provider and selected model support vision. (${reason})`);
       } else {
-        finish(`${offlineRespond(promptWithFiles).text}\n\n— cloud link unavailable (${reason}); answered locally.`);
+        finish(`${offlineRespond(filesPrompt).text}\n\n— cloud link unavailable (${reason}); answered locally.`, true);
       }
     }
+  };
+
+  /** One reply at a time: a second message while EXILE is answering is declined, not interleaved. */
+  const ask = async (text: string, audio?: string, attached: ConsoleAttachment[] = [], opts: AskOptions = {}) => {
+    if (generatingRef.current) {
+      toast.info('EXILE is still replying. Wait for it to finish.');
+      return;
+    }
+    generatingRef.current = true;
+    setGenerating(true);
+    const controller = new AbortController();
+    abortRef.current = controller;
+    const epoch = ++epochRef.current;
+    try {
+      await runAsk(text, audio, attached, opts, { signal: controller.signal, epoch });
+    } finally {
+      // Only release the busy state if this run is still the current one (a conversation change may have taken over).
+      if (abortRef.current === controller) {
+        abortRef.current = null;
+        generatingRef.current = false;
+        setGenerating(false);
+      }
+    }
+  };
+
+  /** Stop the reply in progress: cancels the network read and keeps whatever text had arrived. */
+  const stopGeneration = () => {
+    abortRef.current?.abort();
+  };
+
+  /** Invalidate any run in progress (used when the conversation changes underneath it). */
+  const abandonRun = () => {
+    abortRef.current?.abort();
+    abortRef.current = null;
+    epochRef.current++;
+    generatingRef.current = false;
+    setGenerating(false);
+    setImageGenerating(false);
+  };
+
+  const sendFromComposer = () => void ask(input, undefined, attachments, { replyTo: replyTo?.id });
+
+  /** Re-run EXILE's answer to an existing user message; everything after that message is replaced. */
+  const rerunFrom = (userTurnId: string) => {
+    if (generatingRef.current) return;
+    const target = listTurns().find((t) => t.id === userTurnId);
+    if (!target) return;
+    const removed = truncateAfter(target.id);
+    chatMedia.delete(removed.map((t) => t.id));
+    const { names } = stripAttachmentLabel(target.text);
+    const files = chatMedia.get(target.id).filter((f) => f.origin === 'attached').map(fromChatFile).filter((f): f is ConsoleAttachment => !!f);
+    if (names.length > files.length) toast.info('Some attachments are no longer available (they are no longer stored on this device). Only the text was resent.');
+    void ask('', undefined, files, { reuse: target });
+  };
+
+  const onEditSave = (id: string, text: string) => {
+    const target = listTurns().find((t) => t.id === id);
+    if (!target || generatingRef.current) return;
+    patchTurn(id, { text: withAttachmentLabel(text, stripAttachmentLabel(target.text).names), edited: true });
+    rerunFrom(id);
+  };
+
+  const onRegenerate = (exileId: string) => {
+    const source = previousUserTurn(listTurns(), exileId);
+    if (source) rerunFrom(source.id);
+  };
+
+  const onDeleteTurn = (id: string) => {
+    if (generatingRef.current) return;
+    const all = listTurns();
+    const index = all.findIndex((t) => t.id === id);
+    const turn = all[index];
+    if (!turn) return;
+    deleteTurn(id);
+    if (replyTo?.id === id) setReplyTo(null);
+    // Stored media is only removed once the Undo window has passed; Undo keeps it.
+    let undone = false;
+    const finalize = () => { if (!undone) chatMedia.delete(id); };
+    toast('Message deleted', {
+      duration: 7000,
+      action: { label: 'Undo', onClick: () => { undone = true; restoreTurn(turn, index); } },
+      onDismiss: finalize,
+      onAutoClose: finalize,
+    });
   };
 
   const listen = async () => {
@@ -704,9 +840,12 @@ const Index = () => {
 
 
   const startNewChat = () => {
+    abandonRun();
     startNewSession();
     setInput("");
     setReply("");
+    setReplyTo(null);
+    chatMedia.clear();
     setTurns([]);
     setGeneratedImage(null);
     setImageError("");
@@ -734,7 +873,7 @@ const Index = () => {
           <span className="text-xs tracking-[0.2em] text-cyan-400/70">MESSAGES</span>
         </header>
         <main className="min-h-0 flex-1 overflow-hidden">
-          {renderPanel('whatsapp')}
+          <Suspense fallback={null}>{renderPanel('whatsapp')}</Suspense>
         </main>
       </div>
     );
@@ -853,6 +992,7 @@ const Index = () => {
               <button
                 key={session.id}
                 onClick={() => {
+                  abandonRun();
                   openSession(session.id);
                   setPanel(null);
                   setReply('');
@@ -939,43 +1079,20 @@ const Index = () => {
             <div className="mt-2 text-center text-[8px] tracking-[0.2em] text-cyan-300/60">SYSTEM STATUS · {online ? 'CONNECTED' : 'LOCAL MODE'} · {time.toLocaleDateString()}</div>
           </section>
         )}
-        <div
-          ref={feedRef}
-          className="w-full max-w-4xl min-h-0 flex-1 overflow-y-auto px-2 space-y-4"
-        >
-          {turns.length === 0 ? (
-            <p className="text-center text-[10px] tracking-[0.4em] text-cyan-400/50">
-              {state === 'listening' ? 'LISTENING…' : state === 'thinking' ? 'PROCESSING…' : 'EXILE STANDING BY'}
-            </p>
-          ) : (
-            turns.map((t) => (
-              <div key={t.id} className={`exile-message-enter ${t.role === 'user' ? 'ml-auto max-w-[88%] text-right' : 'mr-auto max-w-[95%]'}`}>
-                <div className="text-[9px] tracking-[0.3em] text-cyan-400/50 mb-1">
-                  {t.role === 'user' ? 'YOU' : 'EXILE'}
-                </div>
-                <div
-                  className={`text-base sm:text-lg leading-8 whitespace-pre-wrap ${
-                    t.role === 'user' ? 'text-cyan-300/85' : 'text-cyan-100/90'
-                  }`}
-                >
-                  {t.role === 'user' ? (
-                    <span>{t.text}</span>
-                  ) : (
-                    renderExileMessage(t.text)
-                  )}
-                </div>
-              </div>
-            ))
-          )}
+        <ChatMessages
+          turns={turns}
+          busy={generating}
+          emptyLabel={state === 'listening' ? 'LISTENING…' : state === 'thinking' ? 'PROCESSING…' : 'EXILE STANDING BY'}
+          statusLabel={state === 'listening' ? 'LISTENING…' : state === 'speaking' ? 'SPEAKING…' : undefined}
+          onReply={setReplyTo}
+          onEditSave={onEditSave}
+          onResend={rerunFrom}
+          onRegenerate={onRegenerate}
+          onDelete={onDeleteTurn}
+        />
 
-          {turns.length > 0 && state !== 'idle' && (
-            <p className="text-center text-[10px] tracking-[0.4em] text-cyan-400/50">
-              {state === 'listening' ? 'LISTENING…' : state === 'thinking' ? 'PROCESSING…' : 'SPEAKING…'}
-            </p>
-          )}
-        </div>
-
-        {(imageGenerating || imageError || generatedImage) && (
+        {/* Finished images now live in the conversation; this panel shows progress and errors. */}
+        {(imageGenerating || imageError) && (
           <section className="mx-auto w-full max-w-3xl overflow-hidden rounded-xl border border-[#c4a253]/45 bg-[#080907] p-3 text-[#f5edda] shadow-[0_0_24px_rgba(196,162,83,0.08)]">
             <div className="mb-3 flex items-center justify-between gap-3">
               <div className="min-w-0">
@@ -1068,41 +1185,24 @@ const Index = () => {
             })}
           </div>
         )}
-        {attachments.length > 0 && (
-          <div className="mx-auto mb-2 flex max-w-xl flex-wrap gap-2" aria-label="Attached files">
-            {attachments.map((item) => (
-              <div key={item.id} title={item.file.name} className="flex max-w-full items-center gap-2 rounded-lg border border-[#c4a253]/50 bg-[#080907] px-2 py-1 text-xs text-[#f5edda]">
-                {item.kind === 'image' ? <Camera className="h-3.5 w-3.5 text-[#e0c478]" /> : <AttachmentFileIcon className="h-3.5 w-3.5 text-[#e0c478]" />}
-                <span className="max-w-48 truncate">{item.file.name}</span>
-                <button type="button" aria-label={`Remove ${item.file.name}`} title={`Remove ${item.file.name}`} onClick={() => setAttachments((current) => current.filter((entry) => entry.id !== item.id))} className="text-[#e0c478] hover:text-red-300">
-                  <X className="h-3.5 w-3.5" />
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
-        {attachmentError && <p role="status" className="mx-auto mb-2 max-w-xl text-xs text-amber-300">{attachmentError}</p>}
-        <form
-          onSubmit={(e) => { e.preventDefault(); void ask(input, undefined, attachments); }}
-          className="mx-auto flex w-full max-w-4xl items-center gap-2 rounded-xl border border-cyan-500/35 bg-slate-950/90 px-3 py-2 shadow-[0_0_30px_rgba(34,211,238,0.15)] backdrop-blur-xl"
-        >
-          <input ref={fileInputRef} type="file" multiple className="hidden" accept="image/png,image/jpeg,image/webp,application/pdf,text/plain,application/json,.txt,.md,.markdown,.csv,.json,.log,.xml,.yaml,.yml,.toml,.js,.jsx,.ts,.tsx,.py,.html,.css,.sql,.java,.c,.h,.cpp,.hpp,.rs,.go,.sh" onChange={(event) => void handleFiles(event.target.files)} />
-          <button type="button" onClick={() => fileInputRef.current?.click()} disabled={attachments.length >= MAX_ATTACHMENTS} className="text-[#e0c478] hover:text-[#f5edda] disabled:opacity-40" aria-label="Attach files" title="Attach files">
-            <Paperclip className="h-4 w-4" />
-          </button>
-          <button type="button" onClick={listen} className="text-cyan-300/80 hover:text-cyan-100" aria-label="Voice input">
-            <Mic className="w-4 h-4" />
-          </button>
-          <input
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            placeholder="Speak or type a directive…"
-            className="flex-1 bg-transparent outline-none text-sm placeholder:text-cyan-500/40 text-cyan-50"
-          />
-          <Button type="submit" disabled={!input.trim() && attachments.length === 0} size="icon" variant="ghost" className="h-8 w-8 rounded-full text-cyan-300 hover:bg-cyan-500/15">
-            <Send className="w-4 h-4" />
-          </Button>
-        </form>
+        <ChatComposer
+          value={input}
+          onChange={setInput}
+          onSend={sendFromComposer}
+          onStop={stopGeneration}
+          busy={generating}
+          attachments={attachments.map((a) => ({ id: a.id, name: a.file.name, size: a.file.size, kind: a.kind, dataUrl: a.dataUrl }))}
+          onRemoveAttachment={(id) => setAttachments((current) => current.filter((entry) => entry.id !== id))}
+          onPickFiles={(files) => void handleFiles(files)}
+          maxAttachments={MAX_ATTACHMENTS}
+          accept={ATTACHMENT_ACCEPT}
+          attachmentError={attachmentError}
+          onMic={listen}
+          replyTo={replyTo}
+          onCancelReply={() => setReplyTo(null)}
+          inputRef={composerRef}
+          fileInputRef={fileInputRef}
+        />
         <p className="mt-1 text-center text-[8px] tracking-[0.2em] text-cyan-500/40">
           EXILE // YOUR AI · YOUR PC · YOUR RULES
         </p>
@@ -1227,7 +1327,7 @@ const Index = () => {
               </button>
             </div>
             <div className="rounded-lg border border-cyan-500/30 bg-slate-900/60 overflow-hidden">
-              {renderPanel(panel)}
+              <Suspense fallback={<div className="p-6 text-center text-xs tracking-widest text-cyan-300/60">LOADING…</div>}>{renderPanel(panel)}</Suspense>
             </div>
           </div>
         </div>

@@ -2,6 +2,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
+import fsRetry from "./fs-retry.cjs";
+const { renameSyncRetry } = fsRetry;
 
 const STORE = path.join(os.homedir(), ".exile-ai", "whatsapp-automation.json");
 
@@ -108,7 +110,7 @@ function persist() {
   try {
     fs.mkdirSync(path.dirname(STORE), { recursive: true });
     fs.writeFileSync(temp, JSON.stringify(state, null, 2), "utf8");
-    fs.renameSync(temp, STORE);
+    renameSyncRetry(fs, temp, STORE);
     return true;
   } catch (error) {
     console.error("[WhatsApp automation] Could not save settings:", error.message);
