@@ -145,9 +145,11 @@ async function processIncoming(item, jid, text, eventEpoch, media) {
       return { skipped: true, reason: "disabled-before-fallback" };
     }
 
-    const fallbackText = media
-      ? `I received your ${media.type}, but I cannot analyze it right now. Please try again shortly.`
-      : "I received your message, but my AI service is temporarily unavailable. Please try again shortly."; 
+    const fallbackText = typeof error?.userMessage === "string" && error.userMessage.trim()
+      ? error.userMessage.trim().slice(0, 600)
+      : media
+        ? `I received your ${media.type}, but I cannot analyze it right now. Please try again shortly.`
+        : "I received your message, but my AI service is temporarily unavailable. Please try again shortly.";
 
     try {
       await sendMessage(jid, fallbackText);
@@ -188,37 +190,144 @@ async function processIncoming(item, jid, text, eventEpoch, media) {
     return { skipped: true, reason: "disabled-before-send" };
   }
 
-  try {
-    if (attachmentReply) {
-      await sendMedia(
+  if (attachmentReply) {
+    const filename = reply.attachment.filename;
+    const caption = String(reply.attachment.caption || replyText).slice(0, 4000);
+
+    // Do not send an attachment unless its queued state was recorded.
+    try {
+      if (typeof reply.attachment.onQueued === "function") {
+        await reply.attachment.onQueued();
+      }
+    } catch (error) {
+      console.error(
+        "[WhatsApp conversation AI] Could not record queued artifact delivery; attachment not sent:",
+        error.message,
+      );
+
+      const notice =
+        `I created "${filename}" but couldn't safely prepare delivery tracking, so I did not send it. It remains in EXILE's Artifacts.`;
+
+      try {
+        await sendMessage(jid, notice);
+      } catch (noticeError) {
+        console.error(
+          "[WhatsApp conversation AI] Could not send delivery-preparation notice:",
+          noticeError.message,
+        );
+      }
+
+      return { sent: false, reason: "delivery-record-failed", artifactRetained: true };
+    }
+
+    // Treat only the media sender's explicit confirmation as successful delivery.
+    try {
+      const outcome = await sendMedia(
         jid,
         reply.attachment.dataUrl,
-        reply.attachment.filename,
-        String(reply.attachment.caption || replyText).slice(0, 4000),
+        filename,
+        caption,
       );
-    } else {
-      await sendMessage(jid, replyText);
+
+      if (outcome?.sent !== true) {
+        throw new Error("WhatsApp did not confirm the attachment was sent.");
+      }
+    } catch (error) {
+      console.error("[WhatsApp conversation AI] Attachment send failed:", error.message);
+
+      // A failed status update must not prevent an honest notice to the contact.
+      try {
+        if (typeof reply.attachment.onFailed === "function") {
+          await reply.attachment.onFailed(error.message);
+        }
+      } catch (hookError) {
+        console.error(
+          "[WhatsApp conversation AI] Could not record failed artifact delivery:",
+          hookError.message,
+        );
+      }
+
+      const notice =
+        `I created "${filename}" but couldn't deliver it as an attachment. It is saved in EXILE's Artifacts.`;
+
+      try {
+        await sendMessage(jid, notice);
+        contact.history.push({ role: "assistant", content: notice, at: Date.now() });
+        contact.history = contact.history.slice(-MAX_HISTORY);
+        contact.updatedAt = Date.now();
+
+        try {
+          persist();
+        } catch (historyError) {
+          console.error(
+            "[WhatsApp conversation AI] Could not persist attachment-failure notice history:",
+            historyError.message,
+          );
+        }
+      } catch (noticeError) {
+        console.error(
+          "[WhatsApp conversation AI] Could not send attachment-failure notice:",
+          noticeError.message,
+        );
+      }
+
+      return { sent: false, reason: "send-failed", artifactRetained: true };
+    }
+
+    // WhatsApp has confirmed the send. Finalization is bookkeeping only:
+    // it must never turn a confirmed send into a reported transport failure.
+    try {
+      if (typeof reply.attachment.onSent === "function") {
+        await reply.attachment.onSent();
+      }
+    } catch (error) {
+      console.error(
+        "[WhatsApp conversation AI] Attachment was sent, but delivery status finalization failed; reconciliation is required:",
+        error.message,
+      );
     }
 
     contact.history.push({
       role: "assistant",
-      content: attachmentReply
-        ? `${replyText}\n[File sent: ${reply.attachment.filename}]`
-        : replyText,
+      content: `${replyText}\n[File sent: ${filename}]`,
+      at: Date.now(),
+    });
+    contact.history = contact.history.slice(-MAX_HISTORY);
+    contact.updatedAt = Date.now();
+
+    try {
+      persist();
+    } catch (error) {
+      console.error(
+        "[WhatsApp conversation AI] Attachment was sent, but conversation history could not be persisted:",
+        error.message,
+      );
+    }
+
+    console.info("[WhatsApp conversation AI] File sent.");
+    return { sent: true, attachment: filename };
+  }
+
+  try {
+    await sendMessage(jid, replyText);
+
+    contact.history.push({
+      role: "assistant",
+      content: replyText,
       at: Date.now(),
     });
     contact.history = contact.history.slice(-MAX_HISTORY);
     contact.updatedAt = Date.now();
     persist();
-    console.info(attachmentReply
-      ? "[WhatsApp conversation AI] File sent."
-      : "[WhatsApp conversation AI] Reply sent.");
-    return { sent: true, attachment: attachmentReply ? reply.attachment.filename : undefined };
+
+    console.info("[WhatsApp conversation AI] Reply sent.");
+    return { sent: true };
   } catch (error) {
-    console.error("[WhatsApp conversation AI] WhatsApp send failed:", error.message);
+    console.error("[WhatsApp conversation AI] WhatsApp reply send failed:", error.message);
     return { sent: false, reason: "send-failed" };
   }
 }
+
 
 export async function handleWhatsAppConversationIncoming(item) {
   const jid = String(item?.jid || "");

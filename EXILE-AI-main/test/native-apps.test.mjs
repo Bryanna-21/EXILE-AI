@@ -104,7 +104,7 @@ test("names and categories are cleaned and bounded", () => {
   assert.equal(v.validateCategory("x".repeat(41)).ok, false);
 });
 
-test("inspectExecutable reports missing, directory and non-executable states on real files", () => {
+test("inspectExecutable reports missing, directory and non-executable states on real files", { skip: process.platform !== "linux" }, () => {
   const dir = tmp();
   try {
     const file = path.join(dir, "prog");
@@ -297,7 +297,7 @@ function makeService(dir, overrides = {}) {
   return { service: createNativeAppService(deps), store, spawned, queue, confirms };
 }
 
-test("importing an application NEVER runs it, and the entry persists across a restart", async () => {
+test("importing an application NEVER runs it, and the entry persists across a restart", { skip: process.platform !== "linux" }, async () => {
   const dir = tmp();
   try {
     const app = makeProbeApp(dir);
@@ -323,7 +323,7 @@ test("importing an application NEVER runs it, and the entry persists across a re
   }
 });
 
-test("duplicate imports are refused with a clear message", async () => {
+test("duplicate imports are refused with a clear message", { skip: process.platform !== "linux" }, async () => {
   const dir = tmp();
   try {
     const app = makeProbeApp(dir);
@@ -352,7 +352,7 @@ test("cancelling the file dialog changes nothing", async () => {
   }
 });
 
-test("launch starts a real process without a shell and tracks running then stopped", async () => {
+test("launch starts a real process without a shell and tracks running then stopped", { skip: process.platform !== "linux" }, async () => {
   const dir = tmp();
   try {
     const app = makeProbeApp(dir, "probe-app", "0.6");
@@ -399,7 +399,7 @@ test("launch starts a real process without a shell and tracks running then stopp
   }
 });
 
-test("several different applications can run at once", async () => {
+test("several different applications can run at once", { skip: process.platform !== "linux" }, async () => {
   const dir = tmp();
   try {
     const a = makeProbeApp(dir, "probe-a", "0.8");
@@ -417,7 +417,7 @@ test("several different applications can run at once", async () => {
   }
 });
 
-test("shell metacharacters in arguments reach the program as literal text and are never interpreted", async () => {
+test("shell metacharacters in arguments reach the program as literal text and are never interpreted", { skip: process.platform !== "linux" }, async () => {
   const dir = tmp();
   try {
     const app = makeProbeApp(dir, "probe-args", "0.1");
@@ -439,7 +439,7 @@ test("shell metacharacters in arguments reach the program as literal text and ar
   }
 });
 
-test("a hostile application NAME is stored as inert text and cannot influence launching", async () => {
+test("a hostile application NAME is stored as inert text and cannot influence launching", { skip: process.platform !== "linux" }, async () => {
   const dir = tmp();
   try {
     const app = makeProbeApp(dir, "probe-name", "0.1");
@@ -458,7 +458,7 @@ test("a hostile application NAME is stored as inert text and cannot influence la
   }
 });
 
-test("changing launch arguments needs native confirmation; declining leaves the entry unchanged", async () => {
+test("changing launch arguments needs native confirmation; declining leaves the entry unchanged", { skip: process.platform !== "linux" }, async () => {
   const dir = tmp();
   try {
     const app = makeProbeApp(dir);
@@ -484,7 +484,7 @@ test("changing launch arguments needs native confirmation; declining leaves the 
   }
 });
 
-test("update rejects fields that must not be edited from the page, including paths", async () => {
+test("update rejects fields that must not be edited from the page, including paths", { skip: process.platform !== "linux" }, async () => {
   const dir = tmp();
   try {
     const app = makeProbeApp(dir);
@@ -501,7 +501,7 @@ test("update rejects fields that must not be edited from the page, including pat
   }
 });
 
-test("interpreters can be imported but never saved with arguments", async () => {
+test("interpreters can be imported but never saved with arguments", { skip: process.platform !== "linux" }, async () => {
   const dir = tmp();
   try {
     const shell = makeProbeApp(dir, "bash");
@@ -517,7 +517,7 @@ test("interpreters can be imported but never saved with arguments", async () => 
   }
 });
 
-test("missing executables are detected, cannot launch, and are recorded in history", async () => {
+test("missing executables are detected, cannot launch, and are recorded in history", { skip: process.platform !== "linux" }, async () => {
   const dir = tmp();
   try {
     const app = makeProbeApp(dir);
@@ -538,7 +538,7 @@ test("missing executables are detected, cannot launch, and are recorded in histo
   }
 });
 
-test("a file that cannot be started reports a launch failure instead of crashing", async () => {
+test("a file that cannot be started reports a launch failure instead of crashing", { skip: process.platform !== "linux" }, async () => {
   const dir = tmp();
   try {
     // Passes the pre-launch checks (a real, executable file) but the OS cannot start it:
@@ -558,7 +558,7 @@ test("a file that cannot be started reports a launch failure instead of crashing
   }
 });
 
-test("relinking repairs a missing application and refuses duplicates", async () => {
+test("relinking repairs a missing application and refuses duplicates", { skip: process.platform !== "linux" }, async () => {
   const dir = tmp();
   try {
     const original = makeProbeApp(dir, "probe-old");
@@ -587,7 +587,7 @@ test("relinking repairs a missing application and refuses duplicates", async () 
   }
 });
 
-test("reorder accepts only an exact permutation and persists", async () => {
+test("reorder accepts only an exact permutation and persists", { skip: process.platform !== "linux" }, async () => {
   const dir = tmp();
   try {
     const a = makeProbeApp(dir, "probe-a");
@@ -610,7 +610,7 @@ test("reorder accepts only an exact permutation and persists", async () => {
   }
 });
 
-test("removing an application deletes only the list entry, never the program", async () => {
+test("removing an application deletes only the list entry, never the program", { skip: process.platform !== "linux" }, async () => {
   const dir = tmp();
   try {
     const app = makeProbeApp(dir);

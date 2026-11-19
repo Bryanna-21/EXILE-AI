@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Copy, Download, Maximize2 } from "lucide-react";
+import { Copy, Download, Maximize2, Wand2, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import type { ChatFile } from "@/lib/chat/mediaStore";
@@ -12,7 +12,7 @@ const btn =
 const blobOf = async (f: ChatFile): Promise<Blob | null> => f.file ?? (f.dataUrl ? dataUrlToBlob(f.dataUrl) : null);
 
 /** Inline image with expand, download and copy. */
-const ImageCard = ({ file }: { file: ChatFile }) => {
+const ImageCard = ({ file, onOpenCanvas, onRegenerate }: { file: ChatFile; onOpenCanvas?: () => void; onRegenerate?: () => void }) => {
   const [open, setOpen] = useState(false);
   const src = file.dataUrl;
   if (!src) return null;
@@ -40,6 +40,12 @@ const ImageCard = ({ file }: { file: ChatFile }) => {
           <button type="button" className={btn} onClick={() => setOpen(true)} aria-label="Expand image"><Maximize2 className="h-3.5 w-3.5" /></button>
           <button type="button" className={btn} onClick={() => void download()} aria-label={`Download ${file.name}`}><Download className="h-3.5 w-3.5" /></button>
           <button type="button" className={btn} onClick={() => void copy()} disabled={!canCopyImage()} aria-label="Copy image" title={canCopyImage() ? "Copy image" : "This browser cannot copy images"}><Copy className="h-3.5 w-3.5" /></button>
+          {file.origin === "generated" && onOpenCanvas && (
+            <button type="button" className={btn} onClick={onOpenCanvas} aria-label="Open Image Canvas" title="Open Image Canvas"><Wand2 className="h-3.5 w-3.5" /></button>
+          )}
+          {file.origin === "generated" && onRegenerate && (
+            <button type="button" className={btn} onClick={onRegenerate} aria-label="Regenerate image" title="Regenerate from the original prompt"><RefreshCw className="h-3.5 w-3.5" /></button>
+          )}
         </span>
       </figcaption>
       <Dialog open={open} onOpenChange={setOpen}>

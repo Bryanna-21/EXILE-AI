@@ -4,12 +4,16 @@ import {
   MessageCircle, Camera, Search, Mic, Files, Share2, Wifi, WifiOff, Activity,
   MessageSquare, Phone, ShieldCheck, Home, Car, LayoutDashboard, Wand2, Film,
   FileText, BookOpen, Settings, X, AudioLines, Grid3x3, KeyRound,
-  History, FilePlus2, Radio, Contact2, Menu, Volume2, VolumeX,
+  History, FilePlus2, Radio, Contact2, Menu, Volume2, VolumeX, Boxes,
 } from 'lucide-react';
 
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import CameraSection from '@/components/CameraSection';
 import FilesSection from '@/components/FilesSection';
+import ArtifactsSection from '@/components/ArtifactsSection';
+import { artifactClient } from '@/lib/artifactClient';
+import { isFail as artifactFailed } from '@/lib/artifactApi';
+import { detectArtifactIntent, STAGE_LABEL, type ArtifactIntent, type UnsupportedIntent } from '@/lib/artifactIntent';
 import ShareSection from '@/components/ShareSection';
 import VoiceSection from '@/components/VoiceSection';
 import ImageAnalysisSection from '@/components/ImageAnalysisSection';
@@ -39,7 +43,6 @@ import { memoryContext } from '@/lib/memory';
 import { logReasoning } from '@/lib/reasoningLog';
 import ChatSection from '@/components/ChatSection';
 import TranscriptSection from '@/components/TranscriptSection';
-import ImageGenSection from '@/components/ImageGenSection';
 import VoiceCommandsSection from '@/components/VoiceCommandsSection';
 import ContactsSection from '@/components/ContactsSection';
 import {
@@ -64,7 +67,6 @@ const menuItems = [
   { id: 'api', icon: KeyRound, label: 'API' },
   { id: 'transcript', icon: History, label: 'Chat History' },
   { id: 'tools', icon: Wand2, label: 'Tools' },
-  { id: 'imagegen', icon: Wand2, label: 'Golden Canvas' },
   { id: 'contacts', icon: Contact2, label: 'Contacts' },
   { id: 'voicecmd', icon: Radio, label: 'Voice Cmds' },
   { id: 'health', icon: Activity, label: 'Health' },
@@ -87,6 +89,7 @@ const menuItems = [
   { id: 'calls', icon: Phone, label: 'Calls' },
   { id: 'camera', icon: Camera, label: 'Optics' },
   { id: 'files', icon: Files, label: 'Files' },
+  { id: 'artifacts', icon: Boxes, label: 'Artifacts' },
   { id: 'share', icon: Share2, label: 'Share' },
 ];
 
@@ -170,10 +173,9 @@ const Index = () => {
       return false;
     }
   });
-  const [generatedImage, setGeneratedImage] = useState<{ dataUrl: string; prompt: string } | null>(null);
+  const [inlineCanvas, setInlineCanvas] = useState<{ turnId: string; fileId: string } | null>(null);
   const [imageGenerating, setImageGenerating] = useState(false);
   const [imageError, setImageError] = useState('');
-  const [imageFullscreen, setImageFullscreen] = useState(false);
   const [turns, setTurns] = useState<TranscriptTurn[]>([]);
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
@@ -267,45 +269,129 @@ const Index = () => {
     return () => window.removeEventListener('keydown', handleFontShortcuts, true);
   }, []);
 
-  useEffect(() => {
-    if (!imageFullscreen) return;
-
-    const handleEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setImageFullscreen(false);
-    };
-
-    window.addEventListener('keydown', handleEscape);
-    return () => window.removeEventListener('keydown', handleEscape);
-  }, [imageFullscreen]);
 
 
-  const generateConsoleImage = async (prompt: string, turnId?: string): Promise<boolean> => {
+
+  /**
+   * File requests in chat go to the local artifact engine, which writes, builds, validates and
+   * stores a real file. The progress text is the engine's real pipeline stage; the finished file
+   * is attached to the reply as a normal file card (preview, open, download).
+   */
+  const makeChatArtifact = async (directive: string, intent: ArtifactIntent, turnId: string): Promise<string> => {
+    const result = await artifactClient.create({ format: intent.format, prompt: directive }, (p) => {
+      updateTurn(turnId, `${STAGE_LABEL[p.stage] ?? p.stage}… ${p.message}`);
+    });
+    if (artifactFailed(result)) {
+      if (result.kind === 'disconnected') return "I can only create files while the EXILE local service is running, and I couldn't reach it. Nothing was created.";
+      const detail = result.result?.validation?.failures[0];
+      return `I couldn't create the ${intent.label}: ${result.error}${detail && !result.error.includes(detail) ? ` (${detail})` : ''} Nothing was saved or sent.`;
+    }
+    const made = result.value;
+    const downloaded = made.artifactId ? await artifactClient.download(made.artifactId) : null;
+    if (downloaded && !artifactFailed(downloaded)) {
+      const blob = downloaded.value.blob;
+      const mime = made.mimeType || blob.type || 'application/octet-stream';
+      const kind = classifyFile(downloaded.value.name, mime);
+      const dataUrl = kind === 'image'
+        ? await new Promise<string | undefined>((resolve) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : undefined);
+            reader.onerror = () => resolve(undefined);
+            reader.readAsDataURL(blob);
+          })
+        : undefined;
+      chatMedia.append(turnId, {
+        id: crypto.randomUUID(), name: downloaded.value.name, mime, size: blob.size, kind, file: blob, dataUrl, origin: 'generated', prompt: directive,
+      });
+    }
+    const checks = made.validation?.checks.length ?? 0;
+    const skipped = made.validation?.skipped.length ? ` (not checked on this computer: ${made.validation.skipped.join('; ')})` : '';
+    return `I created ${made.name} — ${intent.label}, ${Math.max(1, Math.round((made.sizeBytes ?? 0) / 1024))} KB. It passed ${checks} checks${skipped} and is saved under Artifacts.`;
+  };
+
+  /** Plain image requests keep using the existing image path; charts, diagrams and SVG use the engine. */
+  const wantsArtifactEngine = (intent: ArtifactIntent | UnsupportedIntent | null, directive: string): intent is ArtifactIntent | UnsupportedIntent => {
+    if (!intent) return false;
+    if ('unsupported' in intent && intent.unsupported) return true;
+    const f = (intent as ArtifactIntent).format;
+    if (f === 'png' || f === 'jpg' || f === 'webp') return /\b(chart|graph|diagram|infographic|svg)\b/i.test(directive);
+    return true;
+  };
+
+  const generateConsoleImage = async (
+    prompt: string,
+    turnId?: string,
+    replaceFileId?: string,
+    referenceFile?: ChatFile,
+  ): Promise<boolean> => {
     setImageGenerating(true);
     setImageError('');
 
     try {
-      await streamImage(prompt, (dataUrl, isFinal) => {
-        if (!isFinal) return;
+      let finalDataUrl = '';
+      let imageMetadata: {
+        mimeType?: string;
+        artifactId?: string;
+        artifactName?: string;
+        artifactVersion?: number;
+      } | undefined;
 
-        const image = new Image();
-        image.onload = () => {
-          setGeneratedImage({ dataUrl, prompt });
-          rememberGeneratedImage(dataUrl, prompt);
-          if (turnId) {
-            const mime = dataUrlMime(dataUrl);
-            chatMedia.append(turnId, {
-              id: crypto.randomUUID(),
-              name: `exile-image-${Date.now()}.${mime === 'image/jpeg' ? 'jpg' : mime === 'image/webp' ? 'webp' : 'png'}`,
-              mime, size: dataUrlBytes(dataUrl), kind: 'image', dataUrl, origin: 'generated', prompt,
-            });
+      if (referenceFile && !referenceFile.dataUrl) {
+        throw new Error("The reference image is no longer available. Reattach it before editing.");
+      }
+
+      await streamImage(prompt, (dataUrl, isFinal, metadata) => {
+        if (!isFinal) return;
+        finalDataUrl = dataUrl;
+        imageMetadata = metadata;
+      }, undefined, referenceFile ? {
+        referenceImage: referenceFile.dataUrl,
+        artifactId: referenceFile.artifactId,
+        artifactVersion: referenceFile.artifactVersion,
+      } : { provider: "auto" });
+
+      if (!finalDataUrl) {
+        throw new Error('The image provider completed without returning an image.');
+      }
+
+      const image = new Image();
+      image.src = finalDataUrl;
+      await image.decode();
+
+      rememberGeneratedImage(finalDataUrl, prompt);
+
+      if (turnId) {
+        const mime = imageMetadata?.mimeType || dataUrlMime(finalDataUrl);
+        const extension = mime === 'image/jpeg' ? 'jpg' : mime === 'image/webp' ? 'webp' : 'png';
+        const generatedFile: ChatFile = {
+          id: replaceFileId || crypto.randomUUID(),
+          name: imageMetadata?.artifactName || `exile-image-${Date.now()}.${extension}`,
+          mime,
+          size: dataUrlBytes(finalDataUrl),
+          kind: 'image',
+          dataUrl: finalDataUrl,
+          origin: 'generated',
+          prompt,
+          artifactId: imageMetadata?.artifactId,
+          artifactName: imageMetadata?.artifactName,
+          artifactVersion: imageMetadata?.artifactVersion,
+        };
+
+        if (replaceFileId) {
+          const currentFiles = chatMedia.get(turnId);
+          if (!currentFiles.some((file) => file.id === replaceFileId)) {
+            throw new Error("The image selected for replacement is no longer in this message.");
           }
-          setImageError('');
-        };
-        image.onerror = () => {
-          setImageError('The generated image could not be decoded. Your previous image has been preserved.');
-        };
-        image.src = dataUrl;
-      });
+          chatMedia.set(turnId, currentFiles.map((file) =>
+            file.id === replaceFileId ? generatedFile : file
+          ));
+        } else {
+          chatMedia.append(turnId, generatedFile);
+        }
+      }
+
+
+      setImageError('');
       return true;
     } catch (error) {
       const message = error instanceof Error
@@ -370,7 +456,6 @@ const Index = () => {
           </div>
         </div>
       );
-      case 'imagegen': return <ImageGenSection />;
       case 'contacts': return <ContactsSection />;
 
       case 'voicecmd': return <VoiceCommandsSection />;
@@ -392,6 +477,7 @@ const Index = () => {
       case 'voicestudio': return <VoiceStudio />;
       case 'apps': return <AppsSection />;
       case 'files': return <FilesSection />;
+      case 'artifacts': return <ArtifactsSection />;
       case 'share': return <ShareSection />;
       default: return null;
     }
@@ -539,6 +625,19 @@ const Index = () => {
     }
     const exileTurn = addTurn('exile', '…');
 
+    // Files and media (PDF, Word, Excel, PowerPoint, CSV, charts, audio, video ...) are real artifacts.
+    const artifactIntent = !attached.length ? detectArtifactIntent(directive) : null;
+    if (wantsArtifactEngine(artifactIntent, directive)) {
+      const message = 'unsupported' in artifactIntent && artifactIntent.unsupported
+        ? artifactIntent.message
+        : await makeChatArtifact(directive, artifactIntent as ArtifactIntent, exileTurn.id);
+      updateTurn(exileTurn.id, message);
+      setReply(message);
+      setState('idle');
+      say(message);
+      return;
+    }
+
     // Generate images directly in the Console without requiring cloud chat.
     if (!attached.length && (/\b(generate|create|make|draw|paint|design)\b.{0,100}\b(image|picture|artwork|illustration|logo|wallpaper|portrait|icon)\b/i.test(directive)
       || /\b(image|picture|artwork|illustration|logo|wallpaper)\b.{0,60}\b(of|showing|featuring)\b/i.test(directive)
@@ -670,6 +769,122 @@ const Index = () => {
 
   const sendFromComposer = () => void ask(input, undefined, attachments, { replyTo: replyTo?.id });
 
+  const createChatChart = async (chart: { title: string; type: "bar" | "line"; rows: string }) => {
+    if (generatingRef.current) {
+      toast.info("EXILE is still replying. Wait for it to finish.");
+      return;
+    }
+
+    const title = chart.title.trim();
+    if (!title || title.length > 120) {
+      toast.error("Chart title must contain 1–120 characters.");
+      return;
+    }
+
+    const lines = chart.rows.split(/\\r?\\n/).map((line) => line.trim()).filter(Boolean);
+    if (lines.length < 2 || lines.length > 60) {
+      toast.error("A chart requires between 2 and 60 data rows.");
+      return;
+    }
+
+    const data: Array<{ label: string; value: number }> = [];
+    for (let index = 0; index < lines.length; index++) {
+      const separator = lines[index].lastIndexOf(",");
+      if (separator < 1) {
+        toast.error(`Row ${index + 1}: use the format Label,Value.`);
+        return;
+      }
+      const label = lines[index].slice(0, separator).trim();
+      const rawValue = lines[index].slice(separator + 1).trim();
+      const value = Number(rawValue);
+      if (!label || label.length > 80 || !rawValue || !Number.isFinite(value) || Math.abs(value) > 1e9) {
+        toast.error(`Row ${index + 1}: provide a label (1–80 characters) and a valid number (±1 billion).`);
+        return;
+      }
+      data.push({ label, value });
+    }
+
+    generatingRef.current = true;
+    setGenerating(true);
+    setState("thinking");
+    const requestText = `Create a ${chart.type} chart titled "${title}" with ${data.length} data points.`;
+    const userTurn = addTurn("user", requestText);
+    const exileTurn = addTurn("exile", "Creating chart…");
+
+    try {
+      const created = await artifactClient.create({
+        format: "png",
+        name: `${title}.png`,
+        spec: {
+          procedural: {
+            type: chart.type === "bar" ? "bar-chart" : "line-chart",
+            title,
+            data,
+          },
+        },
+      });
+
+      if (created.ok === false) {
+        updateTurn(exileTurn.id, `I couldn't create the chart: ${created.error}`);
+        toast.error(created.error);
+        return;
+      }
+
+      const made = created.value;
+      if (!made.artifactId) {
+        updateTurn(exileTurn.id, "The chart service returned no artifact ID. No preview could be attached.");
+        toast.error("The chart service returned no artifact ID.");
+        return;
+      }
+
+      const downloaded = await artifactClient.download(made.artifactId, made.version);
+      if (downloaded.ok === false) {
+        updateTurn(exileTurn.id, `The chart was saved to Artifacts, but its preview could not be loaded: ${downloaded.error}`);
+        toast.error(`Chart saved, but preview failed: ${downloaded.error}`);
+        return;
+      }
+
+      const blob = downloaded.value.blob;
+      const mime = made.mimeType || blob.type || "image/png";
+      const dataUrl = await new Promise<string | undefined>((resolve) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(typeof reader.result === "string" ? reader.result : undefined);
+        reader.onerror = () => resolve(undefined);
+        reader.readAsDataURL(blob);
+      });
+
+      if (dataUrl) {
+        chatMedia.append(exileTurn.id, {
+          id: crypto.randomUUID(),
+          name: downloaded.value.name,
+          mime,
+          size: blob.size,
+          kind: classifyFile(downloaded.value.name, mime),
+          file: blob,
+          dataUrl,
+          origin: "generated",
+          prompt: requestText,
+          artifactId: made.artifactId,
+          artifactName: made.name,
+          artifactVersion: made.version,
+        });
+      }
+
+      const message = `Chart created and saved to Artifacts: ${made.name}. ${dataUrl ? "The chart preview is attached below." : "The saved chart preview could not be displayed."}`;
+      updateTurn(exileTurn.id, message);
+      setReply(message);
+      toast.success("Chart created and saved to Artifacts.");
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : "Unknown chart-generation error.";
+      updateTurn(exileTurn.id, `Chart creation failed: ${reason}`);
+      toast.error(reason);
+    } finally {
+      generatingRef.current = false;
+      setGenerating(false);
+      setState("idle");
+    }
+  };
+
   /** Re-run EXILE's answer to an existing user message; everything after that message is replaced. */
   const rerunFrom = (userTurnId: string) => {
     if (generatingRef.current) return;
@@ -769,9 +984,8 @@ const Index = () => {
     setReplyTo(null);
     chatMedia.clear();
     setTurns([]);
-    setGeneratedImage(null);
+    setInlineCanvas(null);
     setImageError("");
-    setImageFullscreen(false);
     setPanel(null);
     setSettingsOpen(false);
     setState("idle");
@@ -917,9 +1131,8 @@ const Index = () => {
                   openSession(session.id);
                   setPanel(null);
                   setReply('');
-                  setGeneratedImage(null);
+                  setInlineCanvas(null);
                   setImageError('');
-                  setImageFullscreen(false);
                   setState('idle');
                 }}
                 title={session.title}
@@ -1010,75 +1223,34 @@ const Index = () => {
           onResend={rerunFrom}
           onRegenerate={onRegenerate}
           onDelete={onDeleteTurn}
+          canvasSelection={inlineCanvas}
+          imageCanvasBusy={imageGenerating}
+          imageCanvasError={imageError}
+          onCloseImageCanvas={() => setInlineCanvas(null)}
+          onRegenerateImageCanvas={(file, turnId, prompt) => {
+            if (!prompt.trim()) {
+              toast.error("Enter an image prompt before regenerating.");
+              return;
+            }
+            void generateConsoleImage(prompt, turnId, file.id, file);
+          }}
+          onOpenImage={(file, turnId) => {
+            if (!file.dataUrl) {
+              toast.error("This image is no longer available in the conversation.");
+              return;
+            }
+            setImageError("");
+            setInlineCanvas({ turnId, fileId: file.id });
+          }}
+          onRegenerateImage={(file, turnId) => {
+            if (!file.prompt?.trim()) {
+              toast.error("The original image prompt is unavailable.");
+              return;
+            }
+            void generateConsoleImage(file.prompt, turnId, file.id, file);
+          }}
         />
 
-        {/* Finished images now live in the conversation; this panel shows progress and errors. */}
-        {(imageGenerating || imageError) && (
-          <section className="mx-auto w-full max-w-3xl overflow-hidden rounded-xl border border-[#c4a253]/45 bg-[#080907] p-3 text-[#f5edda] shadow-[0_0_24px_rgba(196,162,83,0.08)]">
-            <div className="mb-3 flex items-center justify-between gap-3">
-              <div className="min-w-0">
-                <p className="text-[10px] font-semibold uppercase tracking-[0.3em] text-[#e0c478]">
-                  GOLDEN CANVAS
-                </p>
-                <p className="mt-1 text-[10px] text-[#a9a18e]">
-                  {imageGenerating ? 'Creating your artwork…' : imageError ? 'Generation notice' : 'Your artwork · Click to expand'}
-                </p>
-              </div>
-              {generatedImage && (
-                <a
-                  href={generatedImage.dataUrl}
-                  download="exile-generated-image.png"
-                  className="shrink-0 rounded-md border border-[#c4a253]/40 px-3 py-2 text-xs text-[#e6c875] hover:bg-[#c4a253]/10"
-                >
-                  Save image
-                </a>
-              )}
-            </div>
-
-            <div className="relative flex min-h-36 max-h-[35vh] items-center justify-center overflow-hidden rounded-lg border border-[#c4a253]/30 bg-[radial-gradient(ellipse_at_center,_#282216_0%,_#11110d_55%,_#080907_100%)] p-2">
-              <div className="pointer-events-none absolute inset-2 rounded-md border border-[#c4a253]/10" />
-
-              {generatedImage && (
-                <button
-                  type="button"
-                  onClick={() => setImageFullscreen(true)}
-                  aria-label="Open generated image full screen"
-                  className="relative z-10 flex max-h-[33vh] max-w-full cursor-zoom-in items-center justify-center focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#e6c875]"
-                >
-                  <img
-                    src={generatedImage.dataUrl}
-                    alt={generatedImage.prompt}
-                    className="max-h-[33vh] max-w-full rounded-md object-contain"
-                  />
-                </button>
-              )}
-
-              {!generatedImage && imageGenerating && (
-                <div className="relative z-10 px-4 py-8 text-center">
-                  <div className="mx-auto mb-3 h-7 w-7 animate-spin rounded-full border-2 border-[#c4a253]/25 border-t-[#e6c875]" />
-                  <p className="text-xs tracking-wide text-[#e6c875]">Rendering your vision</p>
-                  <p className="mt-1 text-[10px] text-[#a9a18e]">Generating locally on your device</p>
-                </div>
-              )}
-
-              {!generatedImage && !imageGenerating && imageError && (
-                <p className="relative z-10 max-w-md px-4 py-6 text-center text-sm text-red-300" role="alert">
-                  {imageError}
-                </p>
-              )}
-            </div>
-
-            {imageError && generatedImage && (
-              <p role="alert" className="mt-2 text-xs text-amber-300">{imageError}</p>
-            )}
-
-            {generatedImage && (
-              <p className="mt-2 break-words text-xs leading-5 text-[#c6a75b]">
-                {generatedImage.prompt}
-              </p>
-            )}
-          </section>
-        )}
       </main>
 
 
@@ -1118,6 +1290,7 @@ const Index = () => {
           accept={ATTACHMENT_ACCEPT}
           attachmentError={attachmentError}
           onMic={listen}
+          onCreateChart={createChatChart}
           replyTo={replyTo}
           onCancelReply={() => setReplyTo(null)}
           inputRef={composerRef}
@@ -1185,54 +1358,6 @@ const Index = () => {
           </button>
         </SheetContent>
       </Sheet>
-
-      {imageFullscreen && generatedImage && (
-        <div
-          className="fixed inset-0 z-[100] flex flex-col bg-[#080907]/[0.98] p-3 text-[#f5edda] sm:p-6"
-          role="dialog"
-          aria-modal="true"
-          aria-label="Golden Canvas full-screen image"
-          onClick={() => setImageFullscreen(false)}
-        >
-          <div className="mx-auto flex w-full max-w-7xl items-center justify-between gap-4 pb-4">
-            <div className="min-w-0">
-              <p className="text-xs font-semibold uppercase tracking-[0.3em] text-[#e6c875]">
-                EXILE · GOLDEN CANVAS
-              </p>
-              <p className="mt-1 truncate text-xs text-[#a9a18e]">{generatedImage.prompt}</p>
-            </div>
-            <div className="flex shrink-0 items-center gap-3">
-              <a
-                href={generatedImage.dataUrl}
-                download="exile-generated-image.png"
-                onClick={(event) => event.stopPropagation()}
-                className="rounded-md border border-[#c4a253]/40 px-3 py-2 text-xs text-[#e6c875] hover:bg-[#c4a253]/10"
-              >
-                Save
-              </a>
-              <button
-                type="button"
-                onClick={() => setImageFullscreen(false)}
-                aria-label="Close full-screen image"
-                className="rounded-md border border-[#c4a253]/40 p-2 text-[#e6c875] hover:bg-[#c4a253]/10"
-              >
-                <X className="h-5 w-5" />
-              </button>
-            </div>
-          </div>
-          <div className="flex min-h-0 flex-1 items-center justify-center overflow-hidden rounded-xl border border-[#c4a253]/30 bg-[radial-gradient(ellipse_at_center,_#282216_0%,_#11110d_55%,_#080907_100%)] p-3 sm:p-6">
-            <img
-              src={generatedImage.dataUrl}
-              alt={generatedImage.prompt}
-              onClick={(event) => event.stopPropagation()}
-              className="max-h-full max-w-full object-contain"
-            />
-          </div>
-          <p className="pt-3 text-center text-[10px] tracking-widest text-[#a9a18e]">
-            PRESS ESC OR CLICK OUTSIDE TO RETURN TO CHAT
-          </p>
-        </div>
-      )}
 
       {/* section overlay */}
       {panel && (

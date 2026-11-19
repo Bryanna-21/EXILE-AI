@@ -252,10 +252,76 @@ export async function streamChat(
 /* Images                                                              */
 /* ------------------------------------------------------------------ */
 
+export interface GeneratedImageMetadata {
+  mimeType?: string;
+  artifactId?: string;
+  artifactName?: string;
+  artifactVersion?: number;
+}
+
+export interface ImageModel {
+  id: string;
+  name?: string;
+  description?: string;
+  input_modalities?: string[];
+  output_modalities?: string[];
+  paid_only?: boolean;
+  free?: boolean;
+  pricing?: unknown;
+}
+
+export async function listImageModels(): Promise<ImageModel[]> {
+  const isLocalApp =
+    typeof window !== "undefined" &&
+    (window.location.protocol === "file:" ||
+      window.location.hostname === "localhost" ||
+      window.location.hostname === "127.0.0.1");
+
+  let base: string;
+  let headers: Record<string, string>;
+
+  if (isLocalApp) {
+    const localApi = await detectLocalApi(true);
+    if (!localApi) throw new AiError("network", "Local image server is unavailable.");
+    base = localApi;
+    headers = { "Content-Type": "application/json" };
+  } else {
+    base = "";
+    headers = authHeaders();
+  }
+
+  const url = isLocalApp ? `${base}/exile-image/models` : endpoint("exile-image/models");
+  const response = await timedFetch(url, { method: "GET", headers }, 30_000);
+  if (!response.ok) {
+    const body = await response.text().catch(() => "");
+    throw classify(response.status, body || "Could not load image models.");
+  }
+
+  const payload = await response.json();
+  if (!Array.isArray(payload.models)) {
+    throw new AiError("server", "Image model catalogue returned an invalid response.");
+  }
+  return payload.models as ImageModel[];
+}
+
 export async function streamImage(
   prompt: string,
-  onFrame: (dataUrl: string, isFinal: boolean) => void,
+  onFrame: (dataUrl: string, isFinal: boolean, metadata?: GeneratedImageMetadata) => void,
   model?: string,
+  options?: {
+    chart?: {
+      type: "bar" | "line";
+      title: string;
+      data: Array<{ label: string; value: number }>;
+    };
+    provider?: "auto" | "pollinations" | "local-stable-diffusion";
+    imageModel?: string;
+    width?: number;
+    height?: number;
+    referenceImage?: string;
+    artifactId?: string;
+    artifactVersion?: number;
+  },
 ): Promise<void> {
   // Desktop and localhost image generation must use the local model API.
   const isLocalApp =
@@ -290,7 +356,7 @@ export async function streamImage(
     {
       method: "POST",
       headers: imageHeaders,
-      body: JSON.stringify({ prompt, model }),
+      body: JSON.stringify({ prompt, model, ...options }),
     },
     390_000,
   );
@@ -329,7 +395,14 @@ export async function streamImage(
         if (event === "error" || p?.type === "error") throw new Error(p?.error?.message || "Image generation failed");
         if (p?.b64_json) {
           const isFinal = event === "image_generation.completed" || p.type === "image_generation.completed";
-          onFrame(`data:image/png;base64,${p.b64_json}`, isFinal);
+          const mimeType = p.mime_type || "image/png";
+          const metadata: GeneratedImageMetadata = {
+            mimeType,
+            artifactId: typeof p.artifact_id === "string" ? p.artifact_id : undefined,
+            artifactName: typeof p.artifact_name === "string" ? p.artifact_name : undefined,
+            artifactVersion: typeof p.artifact_version === "number" ? p.artifact_version : undefined,
+          };
+          onFrame(`data:${mimeType};base64,${p.b64_json}`, isFinal, metadata);
           if (isFinal) sawFinal = true;
         }
       } catch (e) {

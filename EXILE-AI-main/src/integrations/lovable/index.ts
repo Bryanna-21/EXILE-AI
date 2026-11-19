@@ -12,6 +12,14 @@ type SignInOptions = {
 export const lovable = {
   auth: {
     signInWithOAuth: async (provider: "google" | "apple" | "microsoft" | "lovable", opts?: SignInOptions) => {
+      if (!supabase) {
+        return {
+          error: new Error(
+            "Cloud authentication is unavailable. Configure VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY."
+          ),
+        };
+      }
+
       const result = await lovableAuth.signInWithOAuth(provider, {
         ...opts,
         extraParams: {

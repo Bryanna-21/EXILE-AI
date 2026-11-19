@@ -48,6 +48,8 @@ export function audit(kind: AuditKind, summary: string, detail?: Record<string, 
 }
 
 async function mirror(event: AuditEvent) {
+  if (!supabase) return;
+
   try {
     const { data } = await supabase.auth.getSession();
     const uid = data.session?.user?.id;
@@ -76,7 +78,7 @@ export async function wipeEverything(includeCloud = true) {
   const keys = Object.keys(localStorage).filter((k) => k.startsWith("exile"));
   for (const k of keys) localStorage.removeItem(k);
 
-  if (includeCloud) {
+  if (includeCloud && supabase) {
     try {
       const { data } = await supabase.auth.getSession();
       const uid = data.session?.user?.id;

@@ -23,6 +23,10 @@ export interface ChatFile {
   origin: "attached" | "generated";
   /** Prompt used, for generated images. */
   prompt?: string;
+  /** Persistent Artifact Engine reference, when available. */
+  artifactId?: string;
+  artifactName?: string;
+  artifactVersion?: number;
 }
 
 type Listener = () => void;

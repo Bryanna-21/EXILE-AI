@@ -1,4 +1,4 @@
-import { Home, Car, MessageSquare, Phone, Camera, Mic, Files, Search, Image as ImageIcon, Share2, Activity, ShieldCheck, MessageCircle, Film, FileText, BookOpen, Cog, AppWindow, type LucideIcon } from 'lucide-react';
+import { Home, Car, MessageSquare, Phone, Camera, Mic, Files, Search, Image as ImageIcon, Share2, Activity, ShieldCheck, MessageCircle, Film, FileText, BookOpen, Cog, AppWindow, Boxes, type LucideIcon } from 'lucide-react';
 import type { Tone } from '@/lib/missionControl';
 
 /**
@@ -57,6 +57,7 @@ export const CAPABILITIES: Capability[] = [
   { id: 'calls', name: 'Video / Voice Calls', icon: Phone, status: 'placeholder', note: 'Only previews your own mic and camera; no remote calling exists', section: 'calls' },
   { id: 'camera', name: 'Optics', icon: Camera, status: 'live', note: 'Browser camera: photo, video clip, switch camera, download', section: 'camera' },
   { id: 'files', name: 'File Vault', icon: Files, status: 'live', note: 'Browse files or a folder you choose; nothing is uploaded or stored', section: 'files' },
+  { id: 'artifacts', name: 'Artifact engine', icon: Boxes, status: 'needs-setup', note: 'Creates, checks and stores real PDF, Word, Excel, PowerPoint, CSV, JSON, XML, ZIP, image, audio and video files; needs the local service. Writing content from a description needs a provider key; FFmpeg is needed for video and MP3/Ogg/M4A', section: 'artifacts' },
   { id: 'share', name: 'Share Hub', icon: Share2, status: 'live', note: 'System share sheet, copy, email and WhatsApp compose links', section: 'share' },
   { id: 'systems', name: 'Systems Monitor', icon: Activity, status: 'live', note: 'Real checks of network, local API, AI providers, task engine and desktop bridge', section: 'dashboard' },
   { id: 'access', name: 'System Access', icon: ShieldCheck, status: 'needs-setup', note: 'Browser permissions must be granted', section: 'system' },
