@@ -1,44 +1,82 @@
 # EXILE AI
 
-A desktop-first AI workspace: React + TypeScript + Vite UI, an Electron shell, and a local Node server
-(`local/server.mjs`, 127.0.0.1:8787) that hosts chat, task execution, ARC system monitoring and optional integrations.
+EXILE AI is a desktop-first AI workspace built with React, TypeScript, Vite, Electron, and a local Node.js server. It combines AI chat, automation, task execution, system monitoring, and creative tools.
+
+## Technologies
+
+- React and TypeScript
+- Vite
+- Electron
+- Tailwind CSS
+- Node.js
+- Supabase (optional for local-only use)
+
+## Requirements
+
+- Node.js
+- npm
 
 ## Quick start
 
-```bash
-npm ci
-cp .env.example .env        # fill in Supabase values (optional for local-only use)
-npm run local               # local API + Vite dev server, sharing a per-launch API secret
-```
+Install dependencies:
 
-Other scripts: `npm test`, `npm run typecheck`, `npm run lint`, `npm run build`, `npm run electron`,
-`npm run package:win` (Windows installer; must be run on Windows).
+    npm ci
 
-## Configuration
+Configure local environment variables in `.env` using `.env.example` as a reference.
 
-See `.env.example`. Supabase is optional: without it the app runs against the local server and
-Supabase-backed features report a clear configuration error naming the missing variables.
-Provider API keys for the local server go in `.env` (never committed); see `local/README-LOCAL.md`.
+Start the local server:
+
+    npm run local
+
+Start the development interface:
+
+    npm run dev
+
+## Validation
+
+    npm test
+    npm run typecheck
+    npm run lint
+    npm run build
+
+## Desktop
+
+    npm run electron
+    npm run package:win
 
 ## Documentation
 
-- `local/README-LOCAL.md` — local server and providers
-- `docs/release-readiness.md` — release status, test results, blockers, next action
-- `docs/phase1-task-engine-audit.md`, `phase2-platform-decoupling.md`, `phase4-chat-completion.md`,
-  `phase5-native-apps-windows.md`, `security-audit.md`, `phase7-bundle-performance.md`,
-  `phase8-electron-release-review.md`
+- local/README-LOCAL.md — local server and providers
+- docs/release-readiness.md — release status and blockers
+- docs/phase1-task-engine-audit.md
+- docs/phase2-platform-decoupling.md
+- docs/phase4-chat-completion.md
+- docs/phase5-native-apps-windows.md
+- docs/security-audit.md
+- docs/phase7-bundle-performance.md
+- docs/phase8-electron-release-review.md
 
-## Architecture and security model (summary)
+## Architecture and security
 
-- Renderer (React/Vite) → local Node API on `127.0.0.1:8787` (`local/server.mjs`) → providers / tool registry /
-  task orchestrator / ARC process manager. Electron (`electron/main.cjs`) spawns the API and passes a per-launch
-  secret to the renderer through the preload bridge.
-- Every protected local API route requires the `x-exile-local-auth` secret plus loopback Host/Origin checks;
-  CORS is per-request, not wildcard. Risky tool actions go through the permission gateway.
-- Electron windows block off-app navigation and only grant a short allow-list of permissions.
-- Troubleshooting: check `exile-api.log` in the user-data folder; `GET /health` shows API status.
+The React/Vite renderer communicates with the local API at 127.0.0.1:8787. The API connects to provider integrations, the tool registry, task orchestrator, and ARC process manager.
+
+Electron spawns the local API and passes a per-launch secret to the renderer through the preload bridge.
+
+Protected local API routes require the x-exile-local-auth secret and loopback Host/Origin checks. CORS is handled per request. Risky tool actions pass through the permission gateway.
+
+Electron windows block off-app navigation and restrict permissions.
+
+For troubleshooting, inspect exile-api.log in the user-data folder. GET /health reports API status.
+
+## Project structure
+
+- src/ — React application and UI
+- local/ — local API, provider integrations, and artifact engine
+- electron/ — desktop shell and preload bridge
+- supabase/ — optional hosted functions
+- docs/ — architecture and release documentation
+- test/ — automated tests
 
 ## Known limitations
 
-See `docs/release-readiness.md` (Windows installer untested, unsigned, no strict CSP, provider voice/streaming
-untested against real providers).
+Consult docs/release-readiness.md for current release blockers. Windows installer signing and validation, strict Content Security Policy, and real-provider voice/streaming validation may remain outstanding.

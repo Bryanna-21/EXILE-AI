@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, type RefObject } from "react";
+import { useEffect, useLayoutEffect, useState, type RefObject } from "react";
 import { Camera, FileText, Loader2, Mic, Paperclip, Send, Square, X } from "lucide-react";
 import { formatBytes } from "@/lib/chat/files";
 import type { TranscriptTurn } from "@/lib/conversation";
@@ -33,12 +33,35 @@ export interface ChatComposerProps {
   inputRef: RefObject<HTMLTextAreaElement>;
   fileInputRef: RefObject<HTMLInputElement>;
   placeholder?: string;
+  onCreateChart?: (chart: { title: string; type: "bar" | "line"; rows: string }) => void;
 }
 
 const MAX_ROWS_PX = 168;
 
 /** Multiline composer: Enter sends, Shift+Enter adds a line, attachments with previews, reply bar. */
+const IMAGE_PRESETS = [
+  {
+    label: "Golden AI Core",
+    prompt: "A liberated artificial intelligence core floating above a black obsidian platform, intricate gold circuitry, warm volumetric light, cinematic science fiction, ultra detailed",
+  },
+  {
+    label: "Command Center",
+    prompt: "Futuristic AI command center, black glass architecture, elegant gold holographic interfaces, emerald status lights, cinematic lighting, photorealistic",
+  },
+  {
+    label: "Cyberpunk City",
+    prompt: "A futuristic cyberpunk city at night, rain-soaked black streets, golden neon architecture, emerald highlights, atmospheric cinematic photography",
+  },
+  {
+    label: "Concept Art",
+    prompt: "Premium science fiction concept art, dramatic composition, black and gold palette, intricate engineering, realistic materials, beautiful cinematic lighting",
+  },
+];
+
 const ChatComposer = (p: ChatComposerProps) => {
+  const [chartTitle, setChartTitle] = useState("Monthly performance");
+  const [chartType, setChartType] = useState<"bar" | "line">("bar");
+  const [chartRows, setChartRows] = useState("January,120\nFebruary,150\nMarch,135");
   const canSend = !p.busy && (p.value.trim().length > 0 || p.attachments.length > 0);
 
   useLayoutEffect(() => {
@@ -75,6 +98,79 @@ const ChatComposer = (p: ChatComposerProps) => {
         </ul>
       )}
       {p.attachmentError && <p role="status" className="mx-auto mb-2 w-full max-w-4xl text-xs text-amber-300">{p.attachmentError}</p>}
+      <details className="mx-auto mb-2 w-full max-w-4xl rounded-lg border border-cyan-500/20 bg-slate-950/75 text-xs text-cyan-100">
+        <summary className="cursor-pointer select-none px-3 py-2 text-[10px] font-semibold tracking-[0.2em] text-cyan-300">
+          CREATE · IMAGE PRESETS & CHARTS
+        </summary>
+        <div className="space-y-3 border-t border-cyan-500/15 p-3">
+          <div>
+            <p className="mb-2 text-[10px] tracking-widest text-cyan-300/60">IMAGE PROMPT PRESETS</p>
+            <div className="flex flex-wrap gap-2">
+              {IMAGE_PRESETS.map((preset) => (
+                <button
+                  key={preset.label}
+                  type="button"
+                  disabled={p.busy}
+                  onClick={() => {
+                    p.onChange(preset.prompt);
+                    p.inputRef.current?.focus();
+                  }}
+                  className="rounded-md border border-[#c4a253]/35 px-2.5 py-1.5 text-[11px] text-[#e8d49c] transition hover:bg-[#c4a253]/10 disabled:opacity-40"
+                >
+                  {preset.label}
+                </button>
+              ))}
+            </div>
+            <p className="mt-1.5 text-[10px] text-slate-500">Selecting a preset fills the message box; it does not send automatically.</p>
+          </div>
+          {p.onCreateChart && (
+            <div className="border-t border-cyan-500/15 pt-3">
+              <p className="mb-2 text-[10px] tracking-widest text-cyan-300/60">CHART BUILDER</p>
+              <form
+                className="grid gap-2 sm:grid-cols-2"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  if (!p.busy) p.onCreateChart?.({ title: chartTitle, type: chartType, rows: chartRows });
+                }}
+              >
+                <input
+                  value={chartTitle}
+                  onChange={(event) => setChartTitle(event.target.value)}
+                  maxLength={120}
+                  aria-label="Chart title"
+                  placeholder="Chart title"
+                  className="min-w-0 rounded-md border border-cyan-500/25 bg-black/50 px-2.5 py-2 text-xs text-cyan-50 outline-none focus:border-cyan-400/60"
+                />
+                <select
+                  value={chartType}
+                  onChange={(event) => setChartType(event.target.value as "bar" | "line")}
+                  aria-label="Chart type"
+                  className="rounded-md border border-cyan-500/25 bg-slate-950 px-2.5 py-2 text-xs text-cyan-50 outline-none"
+                >
+                  <option value="bar">Bar chart</option>
+                  <option value="line">Line chart</option>
+                </select>
+                <textarea
+                  value={chartRows}
+                  onChange={(event) => setChartRows(event.target.value)}
+                  rows={4}
+                  aria-label="Chart data rows"
+                  placeholder={"January,120\nFebruary,150"}
+                  className="min-h-20 rounded-md border border-cyan-500/25 bg-black/50 px-2.5 py-2 font-mono text-xs text-cyan-50 outline-none focus:border-cyan-400/60 sm:col-span-2"
+                />
+                <p className="text-[10px] text-slate-500 sm:col-span-2">One row per value: Label,Value. Use 2–60 rows.</p>
+                <button
+                  type="submit"
+                  disabled={p.busy}
+                  className="rounded-md border border-cyan-400/35 bg-cyan-500/10 px-3 py-2 text-[11px] font-semibold text-cyan-100 hover:bg-cyan-500/20 disabled:opacity-40 sm:col-span-2"
+                >
+                  CREATE CHART IN CHAT
+                </button>
+              </form>
+            </div>
+          )}
+        </div>
+      </details>
       <form
         onSubmit={(e) => { e.preventDefault(); if (canSend) p.onSend(); }}
         className="mx-auto flex w-full max-w-4xl items-end gap-2 rounded-xl border border-cyan-500/35 bg-slate-950/90 px-3 py-2 shadow-[0_0_30px_rgba(34,211,238,0.15)] backdrop-blur-xl"

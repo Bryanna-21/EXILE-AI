@@ -9,6 +9,7 @@ import net from "node:net";
 
 const SECRET = "test-secret-".padEnd(40, "x");
 let child, base, dir;
+let startupOutput = "";
 const freePort = () => new Promise((res) => { const s = net.createServer().listen(0, "127.0.0.1", () => { const p = s.address().port; s.close(() => res(p)); }); });
 
 before(async () => {
@@ -17,15 +18,28 @@ before(async () => {
   base = `http://127.0.0.1:${port}`;
   child = spawn(process.execPath, ["local/server.mjs"], {
     env: { ...process.env, EXILE_PORT: String(port), PORT: String(port), EXILE_LOCAL_API_SECRET: SECRET, EXILE_DATA_DIR: dir, EXILE_TASK_STORE_DIR: path.join(dir, "tasks"), HOME: dir, USERPROFILE: dir },
-    stdio: "ignore",
+    stdio: ["ignore", "pipe", "pipe"],
   });
-  for (let i = 0; i < 100; i++) {
+  child.stdout.setEncoding("utf8").on("data", (chunk) => { startupOutput = (startupOutput + chunk).slice(-12000); });
+  child.stderr.setEncoding("utf8").on("data", (chunk) => { startupOutput = (startupOutput + chunk).slice(-12000); });
+  child.on("error", (error) => { startupOutput += "\nCHILD PROCESS ERROR: " + error.message; });
+  for (let i = 0; i < 300; i++) {
+    if (child.exitCode !== null) break;
     try { if ((await fetch(`${base}/health`)).ok) return; } catch { /* starting */ }
     await new Promise((r) => setTimeout(r, 100));
   }
-  throw new Error("server did not start");
+  throw new Error("server did not start (exitCode=" + child.exitCode + ", signalCode=" + child.signalCode + ")\n" + startupOutput);
 });
-after(() => { child?.kill(); fs.rmSync(dir, { recursive: true, force: true }); });
+after(async () => {
+  if (child?.pid && child.exitCode === null && child.signalCode === null) {
+    const exited = new Promise((resolve) => child.once("exit", resolve));
+    child.kill();
+    await exited;
+  }
+  if (dir) {
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  }
+});
 
 const H = { "x-exile-local-auth": SECRET };
 

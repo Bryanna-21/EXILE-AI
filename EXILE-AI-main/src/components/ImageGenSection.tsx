@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Wand2,
   Download,
@@ -10,7 +10,8 @@ import {
   ImagePlus,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { streamImage } from "@/lib/ai";
+import { streamImage, listImageModels, type ImageModel } from "@/lib/ai";
+import { artifactClient } from "@/lib/artifactClient";
 import { toast } from "sonner";
 import { logReasoning } from "@/lib/reasoningLog";
 
@@ -19,6 +20,8 @@ type RenderedImage = {
   prompt: string;
   src: string;
   createdAt: number;
+  artifactId?: string;
+  version?: number;
 };
 
 const PRESETS = [
@@ -44,16 +47,145 @@ const PRESETS = [
   },
 ];
 
-const ImageGenSection = () => {
+type ImageGenSectionProps = {
+  initialImage?: {
+    id: string;
+    dataUrl: string;
+    prompt: string;
+    artifactId?: string;
+    version?: number;
+  } | null;
+};
+
+const ImageGenSection = ({ initialImage }: ImageGenSectionProps) => {
   const [prompt, setPrompt] = useState("");
   const [activeImage, setActiveImage] = useState<RenderedImage | null>(null);
   const [history, setHistory] = useState<RenderedImage[]>([]);
   const [isFinal, setFinal] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [chartMode, setChartMode] = useState(false);
+  const [chartType, setChartType] = useState<"bar" | "line">("bar");
+  const [chartTitle, setChartTitle] = useState("Monthly performance");
+  const [chartRows, setChartRows] = useState("January,120\nFebruary,150\nMarch,135");
+  const [imageModels, setImageModels] = useState<ImageModel[]>([]);
+  const [selectedImageModel, setSelectedImageModel] = useState("");
+  const [modelsLoading, setModelsLoading] = useState(true);
+  const [modelsError, setModelsError] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadModels = async () => {
+      setModelsLoading(true);
+      setModelsError("");
+
+      try {
+        const models = await listImageModels();
+
+        if (cancelled) return;
+
+        const usableModels = models.filter(
+          (model) =>
+            model.id &&
+            model.free === true &&
+            (!model.output_modalities?.length ||
+              model.output_modalities.includes("image")),
+        );
+
+        setImageModels(usableModels);
+        setSelectedImageModel((current) =>
+          usableModels.some((model) => model.id === current)
+            ? current
+            : usableModels[0]?.id || "",
+        );
+
+        if (!usableModels.length) {
+          setModelsError("No provider-labelled free contributor image models are currently available. Paid models are hidden and blocked.");
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setModelsError(
+            error instanceof Error
+              ? error.message
+              : "Unable to load image models.",
+          );
+        }
+      } finally {
+        if (!cancelled) setModelsLoading(false);
+      }
+    };
+
+    void loadModels();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+
+
+  useEffect(() => {
+    if (!initialImage) return;
+
+    const image: RenderedImage = {
+      id: initialImage.id || crypto.randomUUID(),
+      prompt: initialImage.prompt,
+      src: initialImage.dataUrl,
+      createdAt: Date.now(),
+      artifactId: initialImage.artifactId,
+      version: initialImage.version,
+    };
+
+    setPrompt(image.prompt);
+    setActiveImage(image);
+    setHistory((previous) => [
+      image,
+      ...previous.filter((item) => item.id !== image.id),
+    ]);
+    setFinal(true);
+  }, [initialImage]);
 
   const run = async (requestedPrompt = prompt) => {
-    const cleanPrompt = requestedPrompt.trim();
+    const cleanPrompt =
+      requestedPrompt.trim() ||
+      (chartMode ? `Create a ${chartType} chart titled ${chartTitle.trim()}` : "");
     if (!cleanPrompt || busy) return;
+
+    const chartData: Array<{ label: string; value: number }> = [];
+    const title = chartTitle.trim();
+
+    if (chartMode) {
+      const lines = chartRows.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+
+      if (!title || title.length > 120) {
+        toast.error("Chart title must contain 1–120 characters.");
+        return;
+      }
+
+      if (lines.length < 2 || lines.length > 60) {
+        toast.error("A chart requires between 2 and 60 data rows.");
+        return;
+      }
+
+      for (let index = 0; index < lines.length; index++) {
+        const separator = lines[index].lastIndexOf(",");
+        if (separator < 1) {
+          toast.error(`Row ${index + 1}: use the format Label,Value.`);
+          return;
+        }
+
+        const label = lines[index].slice(0, separator).trim();
+        const rawValue = lines[index].slice(separator + 1).trim();
+        const value = Number(rawValue);
+
+        if (!label || label.length > 80 || !rawValue || !Number.isFinite(value) || Math.abs(value) > 1e9) {
+          toast.error(`Row ${index + 1}: provide a label (1–80 characters) and a valid number (±1 billion).`);
+          return;
+        }
+
+        chartData.push({ label, value });
+      }
+    }
 
     const id = crypto.randomUUID();
     const createdAt = Date.now();
@@ -61,44 +193,120 @@ const ImageGenSection = () => {
     setPrompt(cleanPrompt);
     setBusy(true);
     setFinal(false);
-    logReasoning("Golden Canvas", "generating image", cleanPrompt.slice(0, 100), 0.9);
+    logReasoning("Golden Canvas", chartMode ? "creating saved chart artifact" : "generating image", cleanPrompt.slice(0, 100), 0.9);
 
     try {
-      await streamImage(cleanPrompt, (dataUrl, final) => {
+      if (chartMode) {
+        const created = await artifactClient.create({
+          format: "png",
+          name: `${title}.png`,
+          spec: {
+            procedural: {
+              type: chartType === "bar" ? "bar-chart" : "line-chart",
+              title,
+              data: chartData,
+            },
+          },
+        });
+
+        if (created.ok === false) {
+          toast.error(created.error);
+          return;
+        }
+
+        const made = created.value;
+        if (!made.artifactId) {
+          toast.error("The chart was created but the service returned no artifact ID.");
+          return;
+        }
+
+        const downloaded = await artifactClient.download(made.artifactId, made.version);
+        if (downloaded.ok === false) {
+          toast.error(`Chart saved, but its preview could not be loaded: ${downloaded.error}`);
+          return;
+        }
+
+        const src = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => {
+            if (typeof reader.result === "string") resolve(reader.result);
+            else reject(new Error("Could not read the saved chart."));
+          };
+          reader.onerror = () => reject(new Error("Could not read the saved chart."));
+          reader.readAsDataURL(downloaded.value.blob);
+        });
+
         const image: RenderedImage = {
-          id,
+          id: made.artifactId,
+          artifactId: made.artifactId,
+          version: made.version,
           prompt: cleanPrompt,
-          src: dataUrl,
+          src,
           createdAt,
         };
 
         setActiveImage(image);
-        setFinal(final);
+        setHistory((previous) => [
+          image,
+          ...previous.filter((item) => item.id !== image.id),
+        ]);
+        setFinal(true);
+        toast.success("Chart created and saved to Artifacts.");
+      } else {
+        await streamImage(cleanPrompt, (dataUrl, final, metadata) => {
+          const image: RenderedImage = {
+            id,
+            prompt: cleanPrompt,
+            src: dataUrl,
+            createdAt,
+            artifactId: metadata?.artifactId,
+            version: metadata?.artifactVersion,
+          };
 
-        if (final) {
-          setHistory((previous) => [
-            image,
-            ...previous.filter((item) => item.id !== id),
-          ]);
-          toast.success("Image created successfully");
-        }
-      });
+          setActiveImage(image);
+          setFinal(final);
+
+          if (final) {
+            setHistory((previous) => [
+              image,
+              ...previous.filter((item) => item.id !== id),
+            ]);
+            toast.success("Image created successfully");
+          }
+        }, undefined, {
+          provider: "auto",
+          imageModel: selectedImageModel || undefined,
+        });
+      }
     } catch (error) {
-      toast.error(
-        error instanceof Error ? error.message : "Image generation failed",
-      );
+      toast.error(error instanceof Error ? error.message : "Image generation failed");
     } finally {
       setBusy(false);
     }
   };
 
-  const downloadImage = (image: RenderedImage) => {
+  const downloadImage = async (image: RenderedImage) => {
+    let href = image.src;
+    let revokeUrl: string | undefined;
+
+    if (image.artifactId) {
+      const downloaded = await artifactClient.download(image.artifactId, image.version);
+      if (downloaded.ok === false) {
+        toast.error(`Could not download saved chart: ${downloaded.error}`);
+        return;
+      }
+      href = URL.createObjectURL(downloaded.value.blob);
+      revokeUrl = href;
+    }
+
     const link = document.createElement("a");
-    link.href = image.src;
+    link.href = href;
     link.download = `exile-canvas-${image.id.slice(0, 8)}.png`;
     document.body.appendChild(link);
     link.click();
     link.remove();
+
+    if (revokeUrl) window.setTimeout(() => URL.revokeObjectURL(revokeUrl!), 1000);
   };
 
   return (
@@ -225,13 +433,136 @@ const ImageGenSection = () => {
                 className="w-full resize-y rounded-xl border border-[#b89548]/25 bg-[#090a08] p-4 text-sm leading-6 text-[#f5edda] outline-none placeholder:text-[#77705e] focus:border-[#d5b568]/70 focus:ring-1 focus:ring-[#d5b568]/20 disabled:opacity-60"
               />
 
+              {!chartMode && (
+                <div className="mt-4 rounded-xl border border-[#b89548]/20 bg-[#090a08] p-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <label
+                      htmlFor="golden-canvas-model"
+                      className="text-xs font-semibold uppercase tracking-[0.18em] text-[#d9bb6c]"
+                    >
+                      Image generation model
+                    </label>
+                    <span className="text-[10px] text-[#8d8675]">
+                      Verified free-contributor models
+                    </span>
+                  </div>
+
+                  <select
+                    id="golden-canvas-model"
+                    value={selectedImageModel}
+                    onChange={(event) => setSelectedImageModel(event.target.value)}
+                    disabled={busy || modelsLoading || imageModels.length === 0}
+                    className="mt-3 w-full rounded-lg border border-[#b89548]/25 bg-[#11110d] p-3 text-sm text-[#f5edda] outline-none focus:border-[#d5b568]/70 disabled:opacity-60"
+                  >
+                    {modelsLoading && <option value="">Loading image models…</option>}
+                    {!modelsLoading && imageModels.length === 0 && (
+                      <option value="">No image models available</option>
+                    )}
+                    {imageModels.map((model) => (
+                      <option key={model.id} value={model.id}>
+                        {model.name || model.id}
+                      </option>
+                    ))}
+                  </select>
+
+                  {selectedImageModel && (
+                    <div className="mt-2 space-y-1">
+                      <p className="text-xs text-[#cbbd9a]">
+                        {imageModels.find((model) => model.id === selectedImageModel)?.description ||
+                          selectedImageModel}
+                      </p>
+                      <p className="text-[10px] text-[#8d8675]">
+                        Provider currently labels this model as a free contributor model. Availability and provider terms may change; paid models are blocked.
+                      </p>
+                    </div>
+                  )}
+
+                  {modelsError && (
+                    <p className="mt-2 text-xs text-amber-400">
+                      Model catalogue unavailable: {modelsError}
+                    </p>
+                  )}
+                </div>
+              )}
+
+              <div className="mt-4 rounded-xl border border-[#b89548]/20 bg-[#090a08] p-3">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[#d9bb6c]">
+                      Data chart builder
+                    </p>
+                    <p className="mt-1 text-xs text-[#8d8675]">
+                      Generate accurate charts from your own values.
+                    </p>
+                  </div>
+                  <Button
+                    type="button"
+                    variant={chartMode ? "default" : "outline"}
+                    size="sm"
+                    disabled={busy}
+                    onClick={() => setChartMode((enabled) => !enabled)}
+                    className={chartMode
+                      ? "bg-[#b89548] text-[#100e08] hover:bg-[#d0ae5d]"
+                      : "border-[#b89548]/40 text-[#e2c779]"}
+                  >
+                    {chartMode ? "Chart mode on" : "Enable chart mode"}
+                  </Button>
+                </div>
+
+                {chartMode && (
+                  <div className="mt-4 space-y-3">
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <label className="block text-xs text-[#cbbd9a]">
+                        Chart type
+                        <select
+                          value={chartType}
+                          onChange={(event) => setChartType(event.target.value as "bar" | "line")}
+                          disabled={busy}
+                          className="mt-1 w-full rounded-lg border border-[#b89548]/25 bg-[#11110d] p-2.5 text-sm text-[#f5edda] outline-none focus:border-[#d5b568]/70"
+                        >
+                          <option value="bar">Bar chart</option>
+                          <option value="line">Line chart</option>
+                        </select>
+                      </label>
+                      <label className="block text-xs text-[#cbbd9a]">
+                        Chart title
+                        <input
+                          value={chartTitle}
+                          onChange={(event) => setChartTitle(event.target.value)}
+                          maxLength={120}
+                          disabled={busy}
+                          placeholder="Monthly performance"
+                          className="mt-1 w-full rounded-lg border border-[#b89548]/25 bg-[#11110d] p-2.5 text-sm text-[#f5edda] outline-none placeholder:text-[#77705e] focus:border-[#d5b568]/70"
+                        />
+                      </label>
+                    </div>
+
+                    <label className="block text-xs text-[#cbbd9a]">
+                      Data rows — one Label,Value pair per line
+                      <textarea
+                        value={chartRows}
+                        onChange={(event) => setChartRows(event.target.value)}
+                        rows={6}
+                        disabled={busy}
+                        spellCheck={false}
+                        placeholder={"January,120\nFebruary,150\nMarch,135"}
+                        className="mt-1 w-full resize-y rounded-lg border border-[#b89548]/25 bg-[#11110d] p-3 font-mono text-sm leading-6 text-[#f5edda] outline-none placeholder:text-[#77705e] focus:border-[#d5b568]/70"
+                      />
+                    </label>
+                    <p className="text-[11px] text-[#8d8675]">
+                      2–60 rows · Labels up to 80 characters · Numeric values from -1 billion to 1 billion.
+                    </p>
+                  </div>
+                )}
+              </div>
+
               <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
                 <span className="text-xs text-[#8d8675]">
                   Enter to render · Shift + Enter for a new line
                 </span>
                 <Button
                   onClick={() => void run()}
-                  disabled={busy || !prompt.trim()}
+                  disabled={busy || (!prompt.trim() && !chartMode)}
                   className="min-w-36 border border-[#e0c16e]/50 bg-gradient-to-r from-[#8b6b2e] to-[#c5a353] font-semibold text-[#100e08] hover:brightness-110 disabled:opacity-40"
                 >
                   {busy ? (

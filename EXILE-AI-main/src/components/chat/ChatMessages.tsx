@@ -15,6 +15,11 @@ export interface ChatMessagesProps extends Omit<MessageHandlers, "onJumpTo"> {
   emptyLabel: string;
   /** Shown under the messages while listening or speaking (not while thinking). */
   statusLabel?: string;
+  canvasSelection: { turnId: string; fileId: string } | null;
+  imageCanvasBusy: boolean;
+  imageCanvasError: string;
+  onCloseImageCanvas: () => void;
+  onRegenerateImageCanvas: (file: import("@/lib/chat/mediaStore").ChatFile, turnId: string, prompt: string) => void;
 }
 
 const NEAR_BOTTOM = 96;
@@ -22,7 +27,7 @@ const NO_FILES: never[] = [];
 const reduced = () => typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
 
 /** Scrollable conversation: day separators, bubbles, thinking/streaming states, and follow-the-bottom scrolling. */
-const ChatMessages = ({ turns, busy, emptyLabel, statusLabel, ...handlers }: ChatMessagesProps) => {
+const ChatMessages = ({ turns, busy, emptyLabel, statusLabel, canvasSelection, imageCanvasBusy, imageCanvasError, onCloseImageCanvas, onRegenerateImageCanvas, ...handlers }: ChatMessagesProps) => {
   const scroller = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
   const [away, setAway] = useState(false);
@@ -106,6 +111,11 @@ const ChatMessages = ({ turns, busy, emptyLabel, statusLabel, ...handlers }: Cha
                   files={media.get(t.id) ?? NO_FILES}
                   quoted={t.replyTo ? byId.get(t.replyTo) ?? null : null}
                   canRegenerate={t.role === "exile" && i === turns.length - 1 && turns.slice(0, i).some((x) => x.role === "user")}
+                  canvasSelection={canvasSelection}
+                  imageCanvasBusy={imageCanvasBusy}
+                  imageCanvasError={imageCanvasError}
+                  onCloseImageCanvas={onCloseImageCanvas}
+                  onRegenerateImageCanvas={onRegenerateImageCanvas}
                   {...stableHandlers}
                   onJumpTo={jumpTo}
                 />

@@ -10,6 +10,7 @@ const SUGGESTED = [
   'GROQ_API_KEY', 'OPENAI_API_KEY', 'GEMINI_API_KEY', 'ANTHROPIC_API_KEY',
   'OPENROUTER_API_KEY', 'TOGETHER_API_KEY', 'DEEPSEEK_API_KEY', 'MISTRAL_API_KEY',
   'XAI_API_KEY', 'PERPLEXITY_API_KEY', 'ELEVENLABS_API_KEY', 'TAVILY_API_KEY',
+  'POLLINATIONS_API_KEY',
 ];
 
 const blank = (): Row => ({ name: '', value: '' });
@@ -17,6 +18,7 @@ const blank = (): Row => ({ name: '', value: '' });
 export default function ApiKeysSection() {
   const [rows, setRows] = useState<Row[]>([blank(), blank()]);
   const [primary, setPrimary] = useState('');
+  const [imageProvider, setImageProvider] = useState('auto');
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<{ ok: boolean; text: string } | null>(null);
   const [providers, setProviders] = useState<string[]>([]);
@@ -28,6 +30,7 @@ export default function ApiKeysSection() {
     const existing: Row[] = (d.keys || []).map((k: any) => ({ name: k.name, value: '' }));
     setRows(existing.length ? [...existing, blank()] : [blank(), blank()]);
     setPrimary(d.primary || '');
+    setImageProvider(d.imageProvider || 'auto');
     setProviders(d.providers || []);
   };
 
@@ -69,11 +72,12 @@ export default function ApiKeysSection() {
       const res = await fetch(`${target}/keys`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ keys, primary: primary.trim() }),
+        body: JSON.stringify({ keys, primary: primary.trim(), imageProvider }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
       setProviders(data.providers || []);
+      setImageProvider(data.imageProvider || imageProvider);
       setRows(
         (data.keys || []).map((k: any) => ({ name: k.name, value: '' })).concat([blank()]),
       );
@@ -166,6 +170,26 @@ export default function ApiKeysSection() {
       >
         <Plus className="w-3.5 h-3.5" /> ADD KEY
       </button>
+
+      <div className="space-y-2 rounded-md border border-cyan-500/20 p-3">
+        <label htmlFor="exile-image-provider" className="block text-[10px] tracking-[0.25em] text-cyan-400/60 uppercase">
+          Image generation provider
+        </label>
+        <select
+          id="exile-image-provider"
+          value={imageProvider}
+          onChange={(event) => setImageProvider(event.target.value)}
+          disabled={busy}
+          className="w-full rounded-md border border-cyan-500/25 bg-slate-900/60 p-2.5 text-xs text-cyan-100 outline-none focus:border-cyan-300/60"
+        >
+          <option value="auto">Automatic — Pollinations cloud</option>
+          <option value="pollinations">Pollinations cloud</option>
+          <option value="local-stable-diffusion">Local Stable Diffusion</option>
+        </select>
+        <p className="text-[11px] leading-relaxed text-cyan-400/60">
+          Pollinations requires a valid POLLINATIONS_API_KEY beginning with sk_. API usage may consume account balance or incur charges. Local Stable Diffusion uses your own machine.
+        </p>
+      </div>
 
       <div className="space-y-1.5">
         <label className="text-[10px] tracking-[0.25em] text-cyan-400/60 uppercase">Preferred provider (optional)</label>

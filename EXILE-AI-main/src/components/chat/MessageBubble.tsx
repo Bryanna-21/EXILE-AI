@@ -11,6 +11,7 @@ import type { ChatFile } from "@/lib/chat/mediaStore";
 import CodeBlock from "./CodeBlock";
 import FileCard from "./FileCard";
 import ImageCard from "./ImageCard";
+import ChatImageCanvas from "./ChatImageCanvas";
 
 export interface MessageHandlers {
   onReply: (turn: TranscriptTurn) => void;
@@ -19,6 +20,8 @@ export interface MessageHandlers {
   onRegenerate: (id: string) => void;
   onDelete: (id: string) => void;
   onJumpTo: (id: string) => void;
+  onOpenImage: (file: ChatFile, turnId: string) => void;
+  onRegenerateImage: (file: ChatFile, turnId: string) => void;
 }
 
 interface Props extends MessageHandlers {
@@ -30,6 +33,11 @@ interface Props extends MessageHandlers {
   files: ChatFile[];
   quoted: TranscriptTurn | null;
   canRegenerate: boolean;
+  canvasSelection: { turnId: string; fileId: string } | null;
+  imageCanvasBusy: boolean;
+  imageCanvasError: string;
+  onCloseImageCanvas: () => void;
+  onRegenerateImageCanvas: (file: ChatFile, turnId: string, prompt: string) => void;
 }
 
 const STATUS: Record<DeliveryStatus, { label: string; icon: JSX.Element }> = {
@@ -55,7 +63,7 @@ function Rich({ text }: { text: string }) {
 
 const itemCls = "gap-2 text-xs text-cyan-100 focus:bg-cyan-500/15 focus:text-cyan-50";
 
-const MessageBubble = ({ turn, status, busy, streaming, thinking, files, quoted, canRegenerate, ...h }: Props) => {
+const MessageBubble = ({ turn, status, busy, streaming, thinking, files, quoted, canRegenerate, canvasSelection, imageCanvasBusy, imageCanvasError, onCloseImageCanvas, onRegenerateImageCanvas, ...h }: Props) => {
   const isUser = turn.role === "user";
   const bodyRef = useRef<HTMLDivElement>(null);
   const [editing, setEditing] = useState(false);
@@ -190,7 +198,24 @@ const MessageBubble = ({ turn, status, busy, streaming, thinking, files, quoted,
 
         {!editing && (generated.length > 0 || others.length > 0 || missingNames.length > 0) && (
           <div className="mt-1">
-            {generated.map((f) => <ImageCard key={f.id} file={f} />)}
+            {generated.map((f) => (
+              <div key={f.id}>
+                <ImageCard
+                  file={f}
+                  onOpenCanvas={() => h.onOpenImage(f, turn.id)}
+                  onRegenerate={() => h.onRegenerateImage(f, turn.id)}
+                />
+                {canvasSelection?.turnId === turn.id && canvasSelection.fileId === f.id && (
+                  <ChatImageCanvas
+                    file={f}
+                    busy={imageCanvasBusy}
+                    error={imageCanvasError}
+                    onClose={onCloseImageCanvas}
+                    onRegenerate={(prompt, reference) => onRegenerateImageCanvas(reference, turn.id, prompt)}
+                  />
+                )}
+              </div>
+            ))}
             {others.map((f) => <FileCard key={f.id} file={f} />)}
             {missingNames.map((n) => (
               <div key={n} className="my-1.5 max-w-sm rounded-lg border border-slate-600/50 bg-slate-950/60 px-2.5 py-1.5 text-[12px] text-slate-300" data-testid="file-missing">
