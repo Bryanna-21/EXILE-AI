@@ -23,6 +23,7 @@ export interface ChatMessagesProps extends Omit<MessageHandlers, "onJumpTo"> {
 }
 
 const NEAR_BOTTOM = 96;
+const NO_FILES: never[] = [];
 const reduced = () => typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
 
 /** Scrollable conversation: day separators, bubbles, thinking/streaming states, and follow-the-bottom scrolling. */
@@ -31,6 +32,23 @@ const ChatMessages = ({ turns, busy, emptyLabel, statusLabel, canvasSelection, i
   const stick = useRef(true);
   const [away, setAway] = useState(false);
   const media = useSyncExternalStore(chatMedia.subscribe, chatMedia.getSnapshot);
+
+  // Stable handler identities: the parent re-renders on every keystroke and recreates its handlers, which would
+  // defeat MessageBubble's memo and re-render the whole history per key press. Calls go through a ref so they
+  // always reach the latest handler.
+  const handlersRef = useRef(handlers);
+  handlersRef.current = handlers;
+  const handlerKeys = Object.keys(handlers).join("|");
+  const stableHandlers = useMemo(() => {
+    const out: Record<string, (...args: unknown[]) => unknown> = {};
+    for (const key of handlerKeys.split("|").filter(Boolean)) {
+      out[key] = (...args: unknown[]) => (handlersRef.current as unknown as Record<string, (...a: unknown[]) => unknown>)[key](...args);
+    }
+    return out as unknown as typeof handlers;
+  }, [handlerKeys]);
+
+  // Load persisted media for the messages on screen (no-op for ones already in memory).
+  useEffect(() => { void chatMedia.hydrate(turns.map((t) => t.id)); }, [turns, media]);
 
   const groups = useMemo(() => new Map(dayGroups(turns).map((g) => [g.startIndex, g.label])), [turns]);
   const byId = useMemo(() => new Map(turns.map((t) => [t.id, t])), [turns]);
@@ -54,12 +72,12 @@ const ChatMessages = ({ turns, busy, emptyLabel, statusLabel, canvasSelection, i
   // A new message from the user always brings the view back to the bottom.
   useEffect(() => { if (last?.role === "user") { stick.current = true; toBottom(true); } }, [last?.id, last?.role, toBottom]);
 
-  const jumpTo = (id: string) => {
+  const jumpTo = useCallback((id: string) => {
     const el = scroller.current?.querySelector<HTMLElement>(`[data-turn-id="${CSS.escape(id)}"]`);
     if (!el) return;
     el.scrollIntoView({ block: "center", behavior: reduced() ? "auto" : "smooth" });
     el.animate?.([{ outline: "2px solid rgba(103,232,249,0.9)" }, { outline: "2px solid transparent" }], { duration: 1200 });
-  };
+  }, []);
 
   return (
     <div className="relative flex min-h-0 w-full max-w-4xl flex-1 flex-col">
@@ -90,7 +108,7 @@ const ChatMessages = ({ turns, busy, emptyLabel, statusLabel, canvasSelection, i
                   busy={busy}
                   streaming={streaming && !thinking}
                   thinking={thinking}
-                  files={media.get(t.id) ?? []}
+                  files={media.get(t.id) ?? NO_FILES}
                   quoted={t.replyTo ? byId.get(t.replyTo) ?? null : null}
                   canRegenerate={t.role === "exile" && i === turns.length - 1 && turns.slice(0, i).some((x) => x.role === "user")}
                   canvasSelection={canvasSelection}
@@ -98,7 +116,7 @@ const ChatMessages = ({ turns, busy, emptyLabel, statusLabel, canvasSelection, i
                   imageCanvasError={imageCanvasError}
                   onCloseImageCanvas={onCloseImageCanvas}
                   onRegenerateImageCanvas={onRegenerateImageCanvas}
-                  {...handlers}
+                  {...stableHandlers}
                   onJumpTo={jumpTo}
                 />
               </div>

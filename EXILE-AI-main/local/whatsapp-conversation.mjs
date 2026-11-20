@@ -1,6 +1,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import fsRetry from "./fs-retry.cjs";
+const { renameSyncRetry } = fsRetry;
 
 const STORE = path.join(os.homedir(), ".exile-ai", "whatsapp-conversations.json");
 const MAX_HISTORY = 40;
@@ -38,7 +40,7 @@ function persist() {
   const temporary = `${STORE}.tmp`;
   fs.writeFileSync(temporary, JSON.stringify(state, null, 2), { mode: 0o600 });
   try {
-    fs.renameSync(temporary, STORE);
+    renameSyncRetry(fs, temporary, STORE);
   } catch (error) {
     try { fs.rmSync(temporary, { force: true }); } catch {}
     throw error;

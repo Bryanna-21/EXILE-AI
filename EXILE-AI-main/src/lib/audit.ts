@@ -3,6 +3,7 @@
  * Written locally first (works offline) and mirrored to the cloud when signed in.
  */
 import { supabase } from "@/integrations/supabase/client";
+import { chatMedia } from "@/lib/chat/mediaStore";
 
 export type AuditKind =
   | "permission"
@@ -75,6 +76,7 @@ export function clearAudit() {
 
 /** Nuke every trace of the operator on this device (and the cloud copy if signed in). */
 export async function wipeEverything(includeCloud = true) {
+  await chatMedia.wipe();
   const keys = Object.keys(localStorage).filter((k) => k.startsWith("exile"));
   for (const k of keys) localStorage.removeItem(k);
 

@@ -19,6 +19,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { assertTaskTransition, assertStepTransition, TERMINAL_TASK_STATUSES } from "./task-states.mjs";
 import { createPlan, validatePlan, extractJson } from "./task-planner.mjs";
+import fsRetry from "./fs-retry.cjs";
+const { renameSyncRetry } = fsRetry;
 
 export const DEFAULT_LIMITS = Object.freeze({
   maxSteps: 12,
@@ -28,6 +30,29 @@ export const DEFAULT_LIMITS = Object.freeze({
 });
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/** Output that carries no information cannot count as evidence that a step worked. */
+export function isMeaningfulOutput(text) {
+  const t = String(text ?? "").trim();
+  if (t.length === 0) return false;
+  return !/^(null|undefined|none|n\/a|ok|true|false|\{\s*\}|\[\s*\]|""|'')$/i.test(t);
+}
+
+/** Reject when the signal aborts, so awaiting a hung provider call cannot outlive a cancel/pause/timeout. */
+function raceAbort(signal, promise) {
+  if (!signal) return promise;
+  if (signal.aborted) return Promise.reject(signal.reason ?? new Error("aborted"));
+  return new Promise((resolve, reject) => {
+    const onAbort = () => reject(signal.reason ?? new Error("aborted"));
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(
+      (v) => { signal.removeEventListener("abort", onAbort); resolve(v); },
+      (e) => { signal.removeEventListener("abort", onAbort); reject(e); },
+    );
+  });
+}
+
+const TERMINAL_APPROVAL_REASON = "Task ended; unused approvals are withdrawn.";
 
 class CancelledError extends Error {}
 class PausedError extends Error {}
@@ -82,8 +107,11 @@ export class TaskOrchestrator {
     const task = this._mustGet(taskId);
     if (TERMINAL_TASK_STATUSES.has(task.status)) return task; // already finished
     const live = this.active.get(taskId);
-    if (live) live.cancelRequested = true;
-    else {
+    if (live) {
+      live.cancelRequested = true;
+      this.gateway.revokeForTask(taskId, "Task cancelled.");
+      live.abort.abort(new CancelledError("cancelled"));
+    } else {
       assertTaskTransition(task.status, "cancelled");
       this._event(task, "cancelled", "Task cancelled before execution started.");
       task.status = "cancelled";
@@ -99,8 +127,13 @@ export class TaskOrchestrator {
       throw Object.assign(new Error(`Cannot pause a ${task.status} task.`), { statusCode: 409 });
     }
     const live = this.active.get(taskId);
-    if (live) live.pauseRequested = true;
-    else {
+    if (live) {
+      // Pause is cooperative: the step in flight finishes (each tool is time-bounded)
+      // and the task stops at the next boundary. Abandoning a running step would
+      // either lose its result or replay its side effects on resume. Cancel and
+      // timeout, by contrast, interrupt in-flight work.
+      live.pauseRequested = true;
+    } else {
       assertTaskTransition(task.status, "paused");
       task.status = "paused";
       this._event(task, "paused", "Paused by operator.");
@@ -122,11 +155,20 @@ export class TaskOrchestrator {
     return this.store.get(taskId);
   }
 
-  /** Return a one-time approval challenge to the local API response layer. */
-  takeApprovalChallenge(requestId) {
+  /** Return a one-time approval challenge only to its owning task. */
+  takeApprovalChallenge(taskId, requestId) {
+    const task = this.store.get(String(taskId));
+    if (!task) return null;
+
     const id = String(requestId);
+    const pendingApproval = (task.approvals ?? []).some(
+      (approval) => approval.requestId === id && approval.decision === null,
+    );
+    if (!pendingApproval) return null;
+
     const token = this.approvalChallenges.get(id);
     if (!token) return null;
+
     this.approvalChallenges.delete(id);
     return token;
   }
@@ -199,6 +241,7 @@ export class TaskOrchestrator {
     task.status = next;
     if (message) this._event(task, next, message, data);
     this._save(task);
+    if (TERMINAL_TASK_STATUSES.has(next)) this.gateway.revokeForTask(task.id, TERMINAL_APPROVAL_REASON);
   }
 
   _setStepStatus(step, next) {
@@ -209,11 +252,29 @@ export class TaskOrchestrator {
   _checkControls(control) {
     if (control.cancelRequested) throw new CancelledError();
     if (control.pauseRequested) throw new PausedError();
-    if (Date.now() > control.deadline) throw new TimeoutError();
+    if (control.timedOut || Date.now() > control.deadline) throw new TimeoutError();
+  }
+
+  /** Provider call that is interrupted by cancel/pause/timeout instead of being waited out. */
+  _model(messages, control) {
+    const signal = control.abort.signal;
+    return raceAbort(signal, Promise.resolve().then(() => this.callModel(messages, { signal })));
   }
 
   async _runLoop(taskId) {
-    const control = { cancelRequested: false, pauseRequested: false, deadline: Date.now() + this.limits.taskTimeoutMs, pendingApproval: null };
+    const control = {
+      cancelRequested: false,
+      pauseRequested: false,
+      timedOut: false,
+      abort: new AbortController(),
+      deadline: Date.now() + this.limits.taskTimeoutMs,
+      pendingApproval: null,
+    };
+    control.timer = setTimeout(() => {
+      control.timedOut = true;
+      control.abort.abort(new TimeoutError("task timeout"));
+    }, this.limits.taskTimeoutMs);
+    control.timer.unref?.();
     this.active.set(taskId, control);
     let task = this._mustGet(taskId);
 
@@ -227,7 +288,7 @@ export class TaskOrchestrator {
           plan = await createPlan({
             objective: task.objective,
             registry: this.registry,
-            callModel: (messages) => this.callModel(messages),
+            callModel: (messages) => this._model(messages, control),
             memoryNotes: this._memoryNotesText(),
           });
         } catch (e) {
@@ -351,6 +412,8 @@ export class TaskOrchestrator {
           if (outcome.ok) {
             this._setStepStatus(fresh, "completed");
             fresh.output = outcome.output;
+            fresh.execution = { ok: true, at: new Date().toISOString(), attempts: 1 };
+            fresh.verificationResult = { passed: null, method: "none", reason: "Reasoning output is model text and is not independently verified.", evidence: "" };
             this._event(task, "step_completed", `Step ${fresh.id} reasoned.`, { stepId: fresh.id, outputPreview: String(outcome.output).slice(0, 300) });
           } else {
             this._setStepStatus(fresh, "failed");
@@ -370,7 +433,23 @@ export class TaskOrchestrator {
           const cur = task.steps.find((s) => s.id === step.id);
           this._checkControls(control);
 
-          const invocation = await this.registry.invoke(cur.tool, cur.args, this._toolCtx(task, cur));
+          const invocation = await this.registry.invoke(cur.tool, cur.args, this._toolCtx(task, cur, control.abort.signal));
+
+          // A verification timeout means evidence was not obtained.
+          // Do not retry the verification or reinterpret missing evidence.
+          if (cur.kind === "verification" && invocation.timedOut) {
+            attemptResult = invocation;
+            break;
+          }
+
+          if ((invocation.aborted || invocation.timedOut) && invocation.started && invocation.risk && invocation.risk !== "safe") {
+            // The adapter may already have produced its effect; never replay it automatically.
+            cur.uncertainSideEffects = true;
+            cur.recoveryNote = "Operation was interrupted after it started; its external outcome is uncertain. Automatic replay is prohibited.";
+            this._event(task, "uncertain_side_effect", `Step ${cur.id} was interrupted mid-flight; outcome uncertain.`, { stepId: cur.id, tool: cur.tool });
+            this._save(task);
+          }
+          if (invocation.aborted) this._checkControls(control);
           const record = { attempt, at: new Date().toISOString(), input: cur.args, result: { ok: invocation.ok, output: invocation.output ?? null, error: invocation.error ?? null, recoverable: !!invocation.recoverable } };
           cur.attempts.push(record);
           // bounded attempt storage
@@ -403,6 +482,7 @@ export class TaskOrchestrator {
         const cur = task.steps.find((s) => s.id === step.id);
 
         if (attemptResult?.ok) {
+          cur.execution = { ok: true, at: new Date().toISOString(), attempts: cur.attempts.length };
           const verified = this._verifyStep(cur, attemptResult);
           cur.output = attemptResult.output;
           cur.data = attemptResult.data ?? null;
@@ -420,8 +500,22 @@ export class TaskOrchestrator {
         } else {
           const errorMsg = attemptResult?.error ?? "No attempt result.";
           cur.error = errorMsg;
+          cur.execution = { ok: false, at: new Date().toISOString(), attempts: cur.attempts.length, timedOut: !!attemptResult?.timedOut };
+          if (cur.kind === "verification") {
+            cur.verificationResult = {
+              passed: false,
+              method: cur.verification?.method ?? "state_check",
+              reason: attemptResult?.timedOut ? "Verification timed out before evidence was produced." : `Verification could not run: ${errorMsg}`,
+              evidence: "",
+            };
+          }
           // Adapt: bounded replan of remaining steps when quota allows.
-          if (!cur.uncertainSideEffects && adaptations < 2 && modelIterations < this.limits.maxModelIterations) {
+          if (
+            !(cur.kind === "verification" && attemptResult?.timedOut) &&
+            !cur.uncertainSideEffects &&
+            adaptations < 2 &&
+            modelIterations < this.limits.maxModelIterations
+          ) {
             modelIterations++;
             adaptations++;
             const adapted = await this._adapt(task, cur, errorMsg, control);
@@ -499,6 +593,7 @@ export class TaskOrchestrator {
         }
       }
     } finally {
+      clearTimeout(control.timer);
       this.active.delete(taskId);
     }
   }
@@ -547,15 +642,16 @@ export class TaskOrchestrator {
       .map((s) => `- ${s.id} [${s.status}] ${s.intent}${s.output ? ` → ${String(s.output).slice(0, 200)}` : ""}`)
       .join("\n");
     try {
-      const text = await this.callModel([
+      const text = await this._model([
         {
           role: "system",
           content: "You are EXILE's task reasoner. Produce a short practical answer for this step only. Do not claim actions you did not perform. Output plain text.",
         },
         { role: "user", content: `Objective: ${task.objective}\nStep intent: ${step.intent}\nPrior step results:\n${context || "(none)"}` },
-      ]);
+      ], control);
       return { ok: true, output: String(text).slice(0, 2000) };
     } catch (e) {
+      this._checkControls(control); // cancel/pause/timeout win over a generic provider error
       return { ok: false, error: String(e?.message ?? e) };
     }
   }
@@ -564,7 +660,7 @@ export class TaskOrchestrator {
     if (control) this._checkControls(control);
     const remaining = task.steps.filter((s) => s.status === "pending" && s.id !== failedStep.id);
     try {
-      const text = await this.callModel([
+      const text = await this._model([
         {
           role: "system",
           content:
@@ -579,7 +675,7 @@ export class TaskOrchestrator {
             `Remaining steps: ${JSON.stringify(remaining.map(({ id, intent, tool, args }) => ({ id, intent, tool, args })))}\n` +
             `Registered catalogue: ${JSON.stringify(this.registry.catalog().map((t) => ({ name: t.name, description: t.description, inputSchema: t.inputSchema, risk: t.risk })))}`,
         },
-      ]);
+      ], control);
       const parsed = extractJson(text);
       if (!parsed || (parsed.action !== "retry" && parsed.action !== "revise")) return null;
       if (parsed.action === "retry") return { note: parsed.note ?? "Retrying with unchanged plan." };
@@ -596,12 +692,21 @@ export class TaskOrchestrator {
       task.steps = [...keepHead, ...tail];
       task.plan = { ...task.plan, revision: (task.plan?.revision ?? 1) + 1, steps: task.steps };
       return { note: parsed.note ?? "Subsequent steps revised." };
-    } catch {
+    } catch (e) {
+      if (control) this._checkControls(control);
       return null;
     }
   }
 
   _verifyStep(step, invocation) {
+    try {
+      return this._verifyStepUnsafe(step, invocation);
+    } catch (e) {
+      return { passed: false, method: step.verification?.method ?? "unknown", reason: `Verification could not be evaluated: ${String(e?.message ?? e).slice(0, 200)}`, evidence: "" };
+    }
+  }
+
+  _verifyStepUnsafe(step, invocation) {
     const v = step.verification ?? {};
     const output = String(invocation.output ?? "");
     if (v.method === "output_contains" && v.criteria) {
@@ -620,12 +725,15 @@ export class TaskOrchestrator {
         evidence: passed ? JSON.stringify(evidence).slice(0, 500) : "",
       };
     }
-    const passed = invocation.ok === true && output.trim().length > 0;
-    return { passed, method: "output_present", reason: passed ? "Non-empty successful output recorded." : "No usable output recorded.", evidence: output.slice(0, 500) };
+    const passed = invocation.ok === true && isMeaningfulOutput(output);
+    return { passed, method: "output_present", reason: passed ? "Meaningful successful output recorded." : "Output was empty or carried no information.", evidence: output.slice(0, 500) };
   }
 
-  _toolCtx(task, step) {
+  _toolCtx(task, step, signal) {
+    const idempotencyKey = `${task?.id}:${step?.id}`;
     return {
+      signal,
+      idempotencyKey,
       authorizeExecution: ({ tool, args }) => this.gateway.authorizeExecution({
         requestId: step?.approval?.requestId,
         taskId: task?.id,
@@ -633,10 +741,10 @@ export class TaskOrchestrator {
         tool,
         args,
       }),
-      recordMemoryNote: (key, value) => this._appendMemory(key, value),
+      recordMemoryNote: (key, value) => this._appendMemory(key, value, idempotencyKey),
       readMemoryNote: (key) =>
         this._memoryNotes().find((note) => note.key === key) ?? null,
-      recordAudit: (summary) => this._appendAudit(summary),
+      recordAudit: (summary) => this._appendAudit(summary, idempotencyKey),
     };
   }
 
@@ -645,9 +753,21 @@ export class TaskOrchestrator {
   }
 
   _memoryNotes() {
+    const file = this._memoryFile();
+    let raw;
     try {
-      return JSON.parse(fs.readFileSync(this._memoryFile(), "utf8"));
+      raw = fs.readFileSync(file, "utf8");
+    } catch (e) {
+      if (e.code === "ENOENT") return [];
+      throw e;
+    }
+    try {
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) throw new Error("not an array");
+      return parsed.filter((n) => n && typeof n.key === "string" && typeof n.value === "string");
     } catch {
+      // Never overwrite unreadable data: keep it for inspection and start clean.
+      try { fs.renameSync(file, `${file}.corrupt-${Date.now()}`); } catch {}
       return [];
     }
   }
@@ -659,17 +779,29 @@ export class TaskOrchestrator {
       .join("\n");
   }
 
-  _appendMemory(key, value) {
+  _appendMemory(key, value, idempotencyKey) {
     const list = this._memoryNotes();
-    list.unshift({ key, value, at: new Date().toISOString() });
-    fs.writeFileSync(this._memoryFile(), JSON.stringify(list.slice(0, 200), null, 2), "utf8");
+    // A retried step must not write the same note twice.
+    if (idempotencyKey && list.some((n) => n.idem === idempotencyKey)) return;
+    list.unshift({ key, value, at: new Date().toISOString(), ...(idempotencyKey ? { idem: idempotencyKey } : {}) });
+    const file = this._memoryFile();
+    const tmp = `${file}.${process.pid}.${crypto.randomBytes(4).toString("hex")}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify(list.slice(0, 200), null, 2), { encoding: "utf8", mode: 0o600 });
+    renameSyncRetry(fs, tmp, file);
   }
 
-  _appendAudit(summary) {
+  _appendAudit(summary, idempotencyKey) {
     const auditFile = path.join(this.store.dir, "audit.jsonl");
+    if (idempotencyKey) {
+      try {
+        const existing = fs.readFileSync(auditFile, "utf8").split("\n").slice(-500);
+        if (existing.some((line) => line.includes(JSON.stringify(idempotencyKey)))) return null;
+      } catch { /* no audit file yet */ }
+    }
     const entry = {
       at: new Date().toISOString(),
       summary: String(summary).slice(0, 500),
+      ...(idempotencyKey ? { idem: idempotencyKey } : {}),
     };
 
     fs.appendFileSync(auditFile, `${JSON.stringify(entry)}\n`, {

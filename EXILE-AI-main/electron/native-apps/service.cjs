@@ -393,10 +393,15 @@ function createNativeAppService(deps) {
       recordHistory(app, "failed", checked.error.message);
       return { ok: false, error: checked.error, status: checked.status };
     }
-    const rule = v.validateProgramAndArgs(checked.path, app.args, platform);
-    if (!rule.ok) {
-      recordHistory(app, "failed", rule.error.message);
-      return rule;
+    // Apply the program rules to what will actually be executed too: a stored path can resolve (junction,
+    // symlink, mapped location) to something the rules forbid, e.g. cmd.exe with arguments or a UNC share.
+    for (const target of new Set([checked.path, checked.realPath])) {
+      const syntax = v.validateExecutablePathSyntax(target, platform);
+      const rule = syntax.ok ? v.validateProgramAndArgs(target, app.args, platform) : syntax;
+      if (!rule.ok) {
+        recordHistory(app, "failed", rule.error.message);
+        return rule;
+      }
     }
 
     const env = { ...process.env };

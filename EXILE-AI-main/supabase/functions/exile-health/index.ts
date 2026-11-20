@@ -12,11 +12,11 @@ Deno.serve(async (req) => {
   const started = Date.now();
   let gateway: { ok: boolean; status: number; ms: number; error?: string } = { ok: false, status: 0, ms: 0 };
 
-  const key = Deno.env.get("LOVABLE_API_KEY");
+  const key = (Deno.env.get("AI_GATEWAY_API_KEY") ?? Deno.env.get("LOVABLE_API_KEY"));
   if (key) {
     try {
       const t0 = Date.now();
-      const r = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+      const r = await fetch(`${Deno.env.get("AI_GATEWAY_URL") ?? "https://ai.gateway.lovable.dev/v1"}/chat/completions`, {
         method: "POST",
         headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
         body: JSON.stringify({

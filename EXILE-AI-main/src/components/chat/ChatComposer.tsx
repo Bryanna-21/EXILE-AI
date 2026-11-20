@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useState, type RefObject } from "react";
-import { Camera, FileText, Loader2, Mic, Paperclip, Send, X } from "lucide-react";
+import { Camera, FileText, Loader2, Mic, Paperclip, Send, Square, X } from "lucide-react";
 import { formatBytes } from "@/lib/chat/files";
 import type { TranscriptTurn } from "@/lib/conversation";
 import { buildQuote } from "@/lib/chat/ops";
@@ -18,6 +18,8 @@ export interface ChatComposerProps {
   value: string;
   onChange: (v: string) => void;
   onSend: () => void;
+  /** When provided, the send button becomes a Stop button while a reply is being generated. */
+  onStop?: () => void;
   busy: boolean;
   attachments: ComposerAttachment[];
   onRemoveAttachment: (id: string) => void;
@@ -57,10 +59,9 @@ const IMAGE_PRESETS = [
 ];
 
 const ChatComposer = (p: ChatComposerProps) => {
-  const [chartOpen, setChartOpen] = useState(false);
   const [chartTitle, setChartTitle] = useState("Monthly performance");
   const [chartType, setChartType] = useState<"bar" | "line">("bar");
-  const [chartRows, setChartRows] = useState("January,120\\nFebruary,150\\nMarch,135");
+  const [chartRows, setChartRows] = useState("January,120\nFebruary,150\nMarch,135");
   const canSend = !p.busy && (p.value.trim().length > 0 || p.attachments.length > 0);
 
   useLayoutEffect(() => {
@@ -154,7 +155,7 @@ const ChatComposer = (p: ChatComposerProps) => {
                   onChange={(event) => setChartRows(event.target.value)}
                   rows={4}
                   aria-label="Chart data rows"
-                  placeholder={"January,120\\nFebruary,150"}
+                  placeholder={"January,120\nFebruary,150"}
                   className="min-h-20 rounded-md border border-cyan-500/25 bg-black/50 px-2.5 py-2 font-mono text-xs text-cyan-50 outline-none focus:border-cyan-400/60 sm:col-span-2"
                 />
                 <p className="text-[10px] text-slate-500 sm:col-span-2">One row per value: Label,Value. Use 2–60 rows.</p>
@@ -198,15 +199,27 @@ const ChatComposer = (p: ChatComposerProps) => {
           enterKeyHint="send"
           className="max-h-[168px] min-h-[24px] flex-1 resize-none self-center bg-transparent py-1 text-sm leading-6 text-cyan-50 outline-none placeholder:text-cyan-500/40"
         />
-        <button
-          type="submit"
-          disabled={!canSend}
-          aria-label={p.busy ? "Sending" : "Send message"}
-          title={p.busy ? "EXILE is replying…" : "Send (Enter)"}
-          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-cyan-300 transition hover:bg-cyan-500/15 disabled:opacity-40 disabled:hover:bg-transparent"
-        >
-          {p.busy ? <Loader2 className="chat-spin h-4 w-4" /> : <Send className="h-4 w-4" />}
-        </button>
+        {p.busy && p.onStop ? (
+          <button
+            type="button"
+            onClick={p.onStop}
+            aria-label="Stop generating"
+            title="Stop generating"
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-cyan-300 transition hover:bg-cyan-500/15"
+          >
+            <Square className="h-3.5 w-3.5 fill-current" />
+          </button>
+        ) : (
+          <button
+            type="submit"
+            disabled={!canSend}
+            aria-label={p.busy ? "Sending" : "Send message"}
+            title={p.busy ? "EXILE is replying…" : "Send (Enter)"}
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-cyan-300 transition hover:bg-cyan-500/15 disabled:opacity-40 disabled:hover:bg-transparent"
+          >
+            {p.busy ? <Loader2 className="chat-spin h-4 w-4" /> : <Send className="h-4 w-4" />}
+          </button>
+        )}
       </form>
     </>
   );

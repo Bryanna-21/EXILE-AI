@@ -1,12 +1,14 @@
-import { useMemo, useState } from "react";
+import { Suspense, lazy, useMemo, useState } from "react";
 import { Check, Copy, Download, Maximize2 } from "lucide-react";
 import { toast } from "sonner";
-import CodeCanvas from "@/components/CodeCanvas";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { languageInfo } from "@/lib/chat/languages";
-import { highlightCode } from "@/lib/chat/highlight";
+import { useHighlightedSegments } from "@/lib/chat/useHighlight";
 import { copyText, downloadText } from "@/lib/chat/dom";
 import { safeFilename } from "@/lib/chat/files";
+
+// The editor is large (~70 KB gz). Load it on first use, not at startup.
+const CodeCanvas = lazy(() => import("@/components/CodeCanvas"));
 
 interface Props {
   code: string;
@@ -22,7 +24,7 @@ const btn =
 /** A code block with language label, highlighting, and a Copy code button that copies only the code. */
 const CodeBlock = ({ code, language, filename, complete }: Props) => {
   const info = useMemo(() => languageInfo(language, code), [language, code]);
-  const segments = useMemo(() => highlightCode(code, info.id), [code, info.id]);
+  const segments = useHighlightedSegments(code, info.id);
   const [copied, setCopied] = useState(false);
   const [expanded, setExpanded] = useState(false);
 
@@ -67,7 +69,7 @@ const CodeBlock = ({ code, language, filename, complete }: Props) => {
             <DialogTitle className="text-sm tracking-widest">{filename ?? info.label}</DialogTitle>
             <DialogDescription className="text-[11px] text-slate-400">Editable copy. Changes here do not alter the message.</DialogDescription>
           </DialogHeader>
-          <CodeCanvas code={code} language={info.id} filename={downloadName} />
+          <Suspense fallback={<div className="p-6 text-center text-xs text-slate-400">Loading editor…</div>}><CodeCanvas code={code} language={info.id} filename={downloadName} /></Suspense>
         </DialogContent>
       </Dialog>
     </div>

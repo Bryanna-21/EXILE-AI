@@ -6,7 +6,7 @@ import type { ChatFile } from "@/lib/chat/mediaStore";
 import { copyText, downloadBlob, openBlob } from "@/lib/chat/dom";
 import { fileExtension, formatBytes, isTextual, type FileKind } from "@/lib/chat/files";
 import { languageInfo } from "@/lib/chat/languages";
-import { highlightCode } from "@/lib/chat/highlight";
+import { useHighlightedSegments } from "@/lib/chat/useHighlight";
 
 const btn =
   "inline-flex h-7 items-center gap-1 rounded-md border border-[#c4a253]/40 px-2 text-[11px] text-[#f0dfaa] transition hover:bg-[#c4a253]/15 disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#e6c875]";
@@ -48,6 +48,7 @@ const FileCard = ({ file }: { file: ChatFile }) => {
   const hasContents = textual || (isPdf && !!file.text);
   const lang = languageInfo(fileExtension(file.name));
   const shown = text === null ? null : text.slice(0, PREVIEW_CHARS);
+  const segments = useHighlightedSegments(shown ?? "", lang.id, open && (file.kind === "code" || file.kind === "data"));
 
   const download = () => {
     if (file.file) downloadBlob(file.file, file.name);
@@ -91,7 +92,7 @@ const FileCard = ({ file }: { file: ChatFile }) => {
               : (
                 <pre className="chat-code-body max-h-[65vh] overflow-auto rounded border border-[#c4a253]/25 bg-slate-950 p-3 text-[12.5px] leading-5 text-slate-100" data-testid="file-preview-text">
                   <code className="block whitespace-pre font-mono">
-                    {(file.kind === "code" || file.kind === "data" ? highlightCode(shown, lang.id) : [{ text: shown, cls: "" }]).map((s, i) => (s.cls ? <span key={i} className={s.cls}>{s.text}</span> : s.text))}
+                    {segments.map((s, i) => (s.cls ? <span key={i} className={s.cls}>{s.text}</span> : s.text))}
                   </code>
                 </pre>
               )

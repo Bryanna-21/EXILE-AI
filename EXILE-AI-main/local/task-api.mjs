@@ -5,6 +5,7 @@ import { PermissionGateway } from "./permission-gateway.mjs";
 import { ToolRegistry } from "./tool-registry.mjs";
 import { TaskOrchestrator } from "./task-orchestrator.mjs";
 import { summarizeTask } from "./task-summary.mjs";
+import { checkLocalRequest, localAuth } from "./local-auth.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const DATA_DIR = process.env.EXILE_DATA_DIR
@@ -48,53 +49,71 @@ function defaultPlannerStatus() {
   return { configured: configured.length > 0, providers: configured, permitted };
 }
 
-async function callModel(messages) {
-  const order = plannerProviderOrder();
-  const providers = PLANNER_PROVIDERS;
+/**
+ * Build the permitted planner provider caller.
+ * The task signal cancels the actual fetch; a provider timeout still permits fallback.
+ */
+export function createPlannerCallModel({
+  fetchImpl = (...args) => fetch(...args),
+  env = process.env,
+  getProviderOrder = plannerProviderOrder,
+} = {}) {
+  return async function callModel(messages, { signal } = {}) {
+    const order = getProviderOrder();
+    const providers = PLANNER_PROVIDERS;
+    let lastError = "No permitted free reasoning provider is configured.";
 
-  let lastError = "No permitted free reasoning provider is configured.";
+    for (const id of order) {
+      const provider = providers[id];
+      const key = env[provider.key];
+      if (!key) continue;
 
-  for (const id of order) {
-    const provider = providers[id];
-    const key = process.env[provider.key];
-    if (!key) continue;
+      try {
+        const timeoutSignal = AbortSignal.timeout(90000);
+        const requestSignal = signal
+          ? AbortSignal.any([signal, timeoutSignal])
+          : timeoutSignal;
 
-    try {
-      const response = await fetch(`${provider.base}/chat/completions`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${key}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          model: provider.model,
-          messages,
-          stream: false,
-          temperature: 0.2,
-        }),
-        signal: AbortSignal.timeout(90000),
-      });
+        const response = await fetchImpl(`${provider.base}/chat/completions`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${key}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            model: provider.model,
+            messages,
+            stream: false,
+            temperature: 0.2,
+          }),
+          signal: requestSignal,
+        });
 
-      if (!response.ok) {
-        lastError = `${id} returned HTTP ${response.status}.`;
-        continue;
+        if (!response.ok) {
+          lastError = `${id} returned HTTP ${response.status}.`;
+          continue;
+        }
+
+        const payload = await response.json();
+        const content = payload?.choices?.[0]?.message?.content;
+        const text = Array.isArray(content)
+          ? content.map((part) => part?.text ?? "").join("")
+          : String(content ?? "");
+
+        if (text.trim()) return text;
+        lastError = `${id} returned an empty response.`;
+      } catch (error) {
+        // A task cancellation must not silently start a fallback provider request.
+        if (signal?.aborted) throw error;
+        lastError = `${id} request failed: ${error.message}`;
       }
-
-      const payload = await response.json();
-      const content = payload?.choices?.[0]?.message?.content;
-      const text = Array.isArray(content)
-        ? content.map((part) => part?.text ?? "").join("")
-        : String(content ?? "");
-
-      if (text.trim()) return text;
-      lastError = `${id} returned an empty response.`;
-    } catch (error) {
-      lastError = `${id} request failed: ${error.message}`;
     }
-  }
 
-  throw new Error(lastError);
+    throw new Error(lastError);
+  };
 }
+
+const callModel = createPlannerCallModel();
 
 const orchestrator = new TaskOrchestrator({
   store,
@@ -105,19 +124,13 @@ const orchestrator = new TaskOrchestrator({
 
 function send(res, status, payload) {
   res.writeHead(status, {
-    "Access-Control-Allow-Origin": "*",
+    // Echo the caller's (already validated, local) origin; never a wildcard.
+    "Access-Control-Allow-Origin": res.exileOrigin ?? "null",
+    Vary: "Origin",
     "Cache-Control": "no-store",
     "Content-Type": "application/json",
   });
   res.end(JSON.stringify(payload));
-}
-
-function localRequest(req) {
-  const origin = req.headers.origin;
-  return !origin ||
-    origin === "null" ||
-    origin === "file://" ||
-    /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(origin);
 }
 
 async function readRequestBody(req) {
@@ -152,14 +165,50 @@ function taskError(res, error) {
  * their own so the real routing, origin checks and state machine run end to end.
  * (Body intentionally not re-indented to keep this diff reviewable.)
  */
-export function createTaskApiHandler({ store, orchestrator, registry, plannerStatus }) {
+const TASK_ID_RE = /^[A-Za-z0-9_-]{6,64}$/;
+const REQUEST_ID_RE = /^[A-Za-z0-9_-]{1,100}$/;
+
+function badRequest(message) {
+  return Object.assign(new Error(message), { statusCode: 400 });
+}
+
+/** Strict request-body schemas. Unknown field types are rejected, not coerced. */
+export function parseCreateBody(body) {
+  if (!body || typeof body !== "object" || Array.isArray(body)) throw badRequest("Request body must be a JSON object.");
+  if (typeof body.objective !== "string" || !body.objective.trim()) throw badRequest("objective must be a non-empty string.");
+  if (body.objective.length > 4000) throw badRequest("objective must be 4000 characters or fewer.");
+  if (body.title !== undefined && (typeof body.title !== "string" || body.title.length > 200)) throw badRequest("title must be a string of at most 200 characters.");
+  if (body.start !== undefined && typeof body.start !== "boolean") throw badRequest("start must be a boolean.");
+  return { objective: body.objective, title: body.title, start: body.start === true };
+}
+
+export function parseApproveBody(body) {
+  if (!body || typeof body !== "object" || Array.isArray(body)) throw badRequest("Request body must be a JSON object.");
+  if (typeof body.requestId !== "string" || !REQUEST_ID_RE.test(body.requestId)) throw badRequest("requestId must be a valid approval request id.");
+  // A missing token is passed through as "" so the gateway answers 403 "Invalid approval token".
+  if (body.token !== undefined && (typeof body.token !== "string" || body.token.length > 200)) throw badRequest("token must be the approval token issued for this request.");
+  // Anything other than a literal `true` is a refusal: ambiguity never grants approval.
+  return { requestId: body.requestId, token: body.token ?? "", approved: body.approved === true };
+}
+
+function taskIdFrom(raw) {
+  let id;
+  try { id = decodeURIComponent(raw); } catch { throw badRequest("Malformed task id."); }
+  if (!TASK_ID_RE.test(id)) throw badRequest("Malformed task id.");
+  return id;
+}
+
+export function createTaskApiHandler({ store, orchestrator, registry, plannerStatus, auth }) {
 return async function handleTaskApi(req, res, url) {
   if (url.pathname !== "/tasks" && !url.pathname.startsWith("/tasks/")) {
     return false;
   }
 
-  if (!localRequest(req)) {
-    send(res, 403, { ok: false, error: "Task API is restricted to the local app." });
+  const origin = req.headers.origin;
+  res.exileOrigin = origin && origin !== "" ? origin : "null";
+  const denied = checkLocalRequest(req, auth);
+  if (denied) {
+    send(res, denied.status, { ok: false, error: denied.error });
     return true;
   }
 
@@ -199,7 +248,7 @@ return async function handleTaskApi(req, res, url) {
     const taskMatch = url.pathname.match(/^\/tasks\/([^/]+)$/);
 
     if (req.method === "GET" && eventMatch) {
-      const task = store.get(decodeURIComponent(eventMatch[1]));
+      const task = store.get(taskIdFrom(eventMatch[1]));
       if (!task) {
         send(res, 404, { ok: false, error: "Task not found." });
       } else {
@@ -209,7 +258,7 @@ return async function handleTaskApi(req, res, url) {
     }
 
     if (req.method === "GET" && taskMatch) {
-      const task = store.get(decodeURIComponent(taskMatch[1]));
+      const task = store.get(taskIdFrom(taskMatch[1]));
       send(res, task ? 200 : 404, task
         ? { ok: true, task }
         : { ok: false, error: "Task not found." });
@@ -218,10 +267,11 @@ return async function handleTaskApi(req, res, url) {
 
     if (req.method === "GET" && challengeMatch) {
       const requestId = url.searchParams.get("requestId");
-      if (!requestId) {
+      taskIdFrom(challengeMatch[1]);
+      if (!requestId || !REQUEST_ID_RE.test(requestId)) {
         send(res, 400, { ok: false, error: "requestId is required." });
       } else {
-        const token = orchestrator.takeApprovalChallenge(requestId);
+        const token = orchestrator.takeApprovalChallenge(challengeMatch[1], requestId);
         send(res, token ? 200 : 404, token
           ? { ok: true, requestId, token }
           : { ok: false, error: "No unused approval challenge is available." });
@@ -238,11 +288,12 @@ return async function handleTaskApi(req, res, url) {
     const body = await readRequestBody(req);
 
     if (url.pathname === "/tasks") {
+      const parsed = parseCreateBody(body);
       const task = orchestrator.createTask({
-        objective: body.objective,
-        title: body.title,
+        objective: parsed.objective,
+        title: parsed.title,
       });
-      if (body.start === true) {
+      if (parsed.start) {
         await orchestrator.startOrResume(task.id);
       }
       send(res, 201, { ok: true, task: store.get(task.id) });
@@ -258,7 +309,7 @@ return async function handleTaskApi(req, res, url) {
       return true;
     }
 
-    const taskId = decodeURIComponent(actionMatch[1]);
+    const taskId = taskIdFrom(actionMatch[1]);
     const action = actionMatch[2];
     let task;
 
@@ -269,11 +320,12 @@ return async function handleTaskApi(req, res, url) {
     } else if (action === "cancel") {
       task = orchestrator.requestCancel(taskId);
     } else {
+      const decision = parseApproveBody(body);
       task = await orchestrator.decideApproval({
         taskId,
-        requestId: body.requestId,
-        token: body.token,
-        approved: body.approved === true,
+        requestId: decision.requestId,
+        token: decision.token,
+        approved: decision.approved,
       });
     }
 
@@ -291,4 +343,5 @@ export const handleTaskApi = createTaskApiHandler({
   orchestrator,
   registry,
   plannerStatus: defaultPlannerStatus,
+  auth: localAuth,
 });

@@ -41,12 +41,16 @@ async function runPowerShell(script) {
   return stdout.trim();
 }
 
-function isProtected(process) {
+/** Processes that must never be terminated from here: this server and its launcher (Electron). */
+const SELF_PIDS = () => new Set([globalThis.process.pid, globalThis.process.ppid].filter(Number.isSafeInteger));
+
+export function isProtected(process, selfPids = SELF_PIDS()) {
   const name = String(process.name ?? "").trim().toLowerCase();
   const path = String(process.path ?? "").toLowerCase();
 
   return (
     Number(process.pid) <= 4 ||
+    selfPids.has(Number(process.pid)) ||
     PROTECTED_NAMES.has(name) ||
     /defender|antimalware|antivirus|endpoint security|exile-ai|arc-ai/i.test(name) ||
     PROTECTED_PATH_PARTS.some((part) => path.includes(part))
@@ -64,7 +68,45 @@ function safeProcessView(process) {
   };
 }
 
-export async function listEligibleProcesses() {
+/**
+ * TTL cache with single-flight: concurrent callers share one PowerShell run, and a result
+ * younger than ttlMs is reused. Failures are not cached. `invalidate()` forces the next read fresh.
+ */
+export function createCachedLoader(load, { ttlMs = 5000, now = () => Date.now() } = {}) {
+  let value = null;
+  let at = 0;
+  let inFlight = null;
+  return {
+    get() {
+      if (value !== null && now() - at < ttlMs) return Promise.resolve(value);
+      if (inFlight) return inFlight;
+      const run = (async () => {
+        try {
+          const result = await load();
+          value = result;
+          at = now();
+          return result;
+        } finally {
+          inFlight = null;
+        }
+      })();
+      inFlight = run;
+      return run;
+    },
+    invalidate() { value = null; at = 0; },
+  };
+}
+
+const processListLoader = createCachedLoader(loadEligibleProcesses, { ttlMs: 5000 });
+
+export function listEligibleProcesses() {
+  if (process.platform !== "win32") {
+    return Promise.reject(new Error("ARC process management currently supports Windows only."));
+  }
+  return processListLoader.get().then((list) => list.map((p) => ({ ...p })));
+}
+
+async function loadEligibleProcesses() {
   if (process.platform !== "win32") {
     throw new Error("ARC process management currently supports Windows only.");
   }
@@ -176,6 +218,8 @@ export async function terminateSelectedProcess({
     $lowerPath = [string]$path
     $isProtected = (
       $targetId -le 4 -or
+      $targetId -eq ${globalThis.process.pid} -or
+      $targetId -eq ${globalThis.process.ppid} -or
       $protectedNames -contains $lowerName -or
       $lowerName -match "defender|antimalware|antivirus|endpoint security|exile-ai|arc-ai" -or
       $lowerPath.ToLowerInvariant().Contains("\\windows\\system32\\") -or
@@ -254,6 +298,7 @@ export async function terminateSelectedProcess({
     }
   `;
 
+  processListLoader.invalidate();
   try {
     const output = await runPowerShell(script);
     const result = JSON.parse(output);
